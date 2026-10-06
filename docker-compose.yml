@@ -1,0 +1,24 @@
+services:
+  ttalk:
+    build: .
+    image: ttalk-bot-manager
+    container_name: ttalk-bot-manager
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DADOS_DIR: /app/data
+      CONFIG_DIR: /app/config
+      PAINEL_HOST: 0.0.0.0
+      PAINEL_PORTA: "3100"
+    volumes:
+      # Banco, currículos, sessão do WhatsApp e backups (dono: uid 1000)
+      - ./data:/app/data
+      # Textos padrão e YAML para a importação inicial (os bots são editados pelo painel)
+      - ./config:/app/config:ro
+    ports:
+      # Só local: o proxy reverso (Caddy) publica com HTTPS
+      - "127.0.0.1:3100:3100"
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

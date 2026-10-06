@@ -1,0 +1,25 @@
+codigo: VEND-OUT26
+vaga: Vendedor(a) de loja
+status: aberto            # rascunho | aberto | encerrado
+abre_em: 2026-10-06
+encerra_em: 2026-10-31
+retencao_meses: 12
+
+perguntas:
+  - chave: nome
+    tipo: texto
+    validacao: nome_completo
+  - chave: cidade
+    tipo: texto
+  - chave: disponibilidade
+    tipo: enquete
+    opcoes: [Manhã, Tarde, Integral, Escala 6x1]
+  - chave: pretensao
+    tipo: texto
+  - chave: curriculo
+    tipo: arquivo
+    formatos: [pdf, docx, jpg, png]
+    tamanho_max_mb: 10
+
+mensagens: {}
+  # demais chaves herdam de config/mensagens-padrao.yaml se não forem definidas aqui

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+.env
+*.log
+
+# Documentos internos (não publicar)
+*Planejamento*
+.kilo/
+docs/img/*.html

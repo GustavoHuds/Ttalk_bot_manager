@@ -1,0 +1,27 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What the candidate sent (type only, e.g. "two photos then a PDF"), which bot settings, which panel page.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Ttalk version / Baileys version / phone (Android or iPhone)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: Logs contain IDs only. Please do not paste personal data.
+      render: text
