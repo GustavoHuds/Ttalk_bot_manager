@@ -80,6 +80,8 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
   private estado: EstadoConexao = { status: 'iniciando', qr: null, desde: Date.now(), numero: null, motivo: null }
   /** Evita pedir de novo os metadados de um grupo a cada envio (WhatsApp bane quem exagera). */
   private cacheGrupos = new Map<string, GroupMetadata>()
+  /** Uma leitura de metadados por grupo de cada vez, para reabastecer o cache depois de uma mudança. */
+  private buscasGrupo = new Map<string, Promise<GroupMetadata | undefined>>()
   private novaSessaoEmAndamento: Promise<void> | null = null
 
   constructor(private readonly o: OpcoesBaileys) {}
@@ -118,7 +120,7 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
         const conteudo = key.id ? this.o.repo.enviada(this.o.numeroId, key.id) : null
         return conteudo ? (JSON.parse(conteudo, BufferJSON.reviver) as proto.IMessage) : undefined
       },
-      ...(this.o.papel === 'grupos' ? { cachedGroupMetadata: async (jid: string) => this.cacheGrupos.get(jid) } : {})
+      ...(this.o.papel === 'grupos' ? { cachedGroupMetadata: (jid: string) => this.grupoEmCache(jid) } : {})
     })
     this.sock = sock
 
@@ -147,6 +149,7 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
 
   private aoFechar(erro: ErroDesconexao | undefined): void {
     this.cacheGrupos.clear()
+    this.buscasGrupo.clear()
     const codigo = erro?.output?.statusCode
     this.sock = null
     if (this.parado) return
@@ -273,12 +276,12 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
       for (const u of us) {
         if (!u.id) continue
         const anterior = this.cacheGrupos.get(u.id)
-        this.cacheGrupos.delete(u.id)
+        this.esquecerGrupo(u.id)
         if (u.subject && anterior?.subject !== u.subject) emitir({ tipo: 'renomeado', jid: u.id, nome: u.subject })
       }
     })
     sock.ev.on('group-participants.update', (u) => {
-      this.cacheGrupos.delete(u.id)
+      this.esquecerGrupo(u.id)
       if (!u.participants.some((p) => souEu(this.eu(), p))) return
       if (u.action === 'remove') emitir({ tipo: 'saiu', jid: u.id })
       else if (u.action === 'promote' || u.action === 'demote') emitir({ tipo: 'admin', jid: u.id, admin: u.action === 'promote' })
@@ -288,6 +291,38 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
           .catch((err) => this.o.log.warn({ err }, 'não foi possível ler o grupo novo'))
       }
     })
+  }
+
+  /** Tira o grupo do cache; uma leitura em andamento (de antes da mudança) não volta a gravá-lo. */
+  private esquecerGrupo(jid: string): void {
+    this.cacheGrupos.delete(jid)
+    this.buscasGrupo.delete(jid)
+  }
+
+  /**
+   * Metadados para o Baileys enviar a um grupo. Depois que uma mudança tirou o grupo do cache, lê
+   * de novo uma vez só (envios simultâneos ao mesmo grupo esperam a mesma leitura) e guarda. Em
+   * erro ou sem conexão pronta devolve undefined e o Baileys segue como faria sem cache.
+   */
+  private grupoEmCache(jid: string): Promise<GroupMetadata | undefined> {
+    const g = this.cacheGrupos.get(jid)
+    if (g) return Promise.resolve(g)
+    const sock = this.sock
+    if (!sock || !this.pronta()) return Promise.resolve(undefined)
+    const andamento = this.buscasGrupo.get(jid)
+    if (andamento) return andamento
+    const busca: Promise<GroupMetadata | undefined> = sock.groupMetadata(jid).then(
+      (md) => {
+        if (this.buscasGrupo.get(jid) === busca) this.cacheGrupos.set(jid, md)
+        return md
+      },
+      () => undefined
+    )
+    this.buscasGrupo.set(jid, busca)
+    void busca.finally(() => {
+      if (this.buscasGrupo.get(jid) === busca) this.buscasGrupo.delete(jid)
+    })
+    return busca
   }
 
   private async sincronizarGrupos(): Promise<void> {

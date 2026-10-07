@@ -168,17 +168,30 @@ export class GerenciadorConexoes<C extends ConexaoGerida> {
     // Tira a linha do mapa já, na hora, se havia uma: é o que avisa um adicionar() que já
     // passou da fila e está esperando iniciar() que esta conexão não é mais a atual.
     this.linhas.delete(numeroId)
+    // O expedidor para já, na hora: nada mais sai por este número enquanto a fila termina o que
+    // estiver em andamento. Só o fechamento da conexão espera a vez.
+    linha?.expedidor.parar()
     // Sempre entra na fila, mesmo sem linha: só assim um adicionar() enfileirado antes deste
     // parar() (e que ainda não rodou) continua vendo a ordem certa das coisas quando rodar.
     return this.porNumero(numeroId, async () => {
       if (!linha) return
-      linha.expedidor.parar()
       try {
         await linha.conexao.parar()
       } catch (err) {
         this.log.error({ err, numero: numeroId }, 'falha ao parar a conexão do número')
       }
     })
+  }
+
+  /** Para o envio de todos os números na hora (desligamento): as conexões continuam abertas. */
+  pararExpedidores(): void {
+    for (const [id, linha] of this.linhas) {
+      try {
+        linha.expedidor.parar()
+      } catch (err) {
+        this.log.error({ err, numero: id }, 'falha ao parar o expedidor do número')
+      }
+    }
   }
 
   async pararTodos(): Promise<void> {

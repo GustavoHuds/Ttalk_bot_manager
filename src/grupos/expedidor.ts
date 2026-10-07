@@ -16,6 +16,12 @@ export interface OpcoesExpedidorGrupos {
 
 const MAX_TENTATIVAS = 5
 
+/**
+ * Resposta a comando que ficou parada na fila (número desconectado, reenvios) por mais que isto
+ * já não faz sentido no grupo: é descartada em vez de chegar fora de contexto.
+ */
+export const VALIDADE_SAIDA_GRUPO_MS = 30 * 60_000
+
 /** "Digitando..." curto: entre 1 e 2 segundos. */
 export function duracaoDigitandoGrupo(texto: string): number {
   return Math.min(2000, Math.max(1000, texto.length * 20))
@@ -75,6 +81,11 @@ export class ExpedidorGrupos {
         if (this.parado || !this.o.conexao.pronta()) return
         const item = this.o.grupos.proximaSaida(this.o.numeroId, jid)
         if (!item || item.proximaEm > this.relogio()) return
+        if (this.relogio() - item.criadaEm > VALIDADE_SAIDA_GRUPO_MS) {
+          this.o.log.warn({ saida: item.id, numero: this.o.numeroId }, 'mensagem ao grupo descartada: ficou tempo demais na fila')
+          this.o.grupos.removerSaida(item.id)
+          continue
+        }
         await this.limite.reservar()
         // A espera pela vaga pode ser longa; se a conexão caiu nesse meio-tempo, não envia.
         if (this.parado || !this.o.conexao.pronta()) return

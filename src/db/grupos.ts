@@ -36,6 +36,7 @@ export interface ItemSaidaGrupo {
   conteudo: string
   tentativas: number
   proximaEm: number
+  criadaEm: number
 }
 
 interface LinhaGrupo {
@@ -275,7 +276,7 @@ export class RepoGrupos {
   proximaSaida(numeroId: number, jid: string): ItemSaidaGrupo | null {
     const r = this.db
       .prepare(
-        `SELECT id, jid, conteudo, tentativas, proxima_em AS proximaEm FROM saida_grupos
+        `SELECT id, jid, conteudo, tentativas, proxima_em AS proximaEm, criada_em AS criadaEm FROM saida_grupos
          WHERE numero_id = ? AND jid = ? ORDER BY id LIMIT 1`
       )
       .get(numeroId, jid) as ItemSaidaGrupo | undefined

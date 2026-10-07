@@ -72,6 +72,15 @@ describe('gerenciador de conexões', () => {
     expect(g.estados().size).toBe(0)
   })
 
+  it('pararExpedidores para todos os expedidores na hora, sem mexer nas conexões', async () => {
+    const { eventos, g } = fabrica()
+    await g.iniciarTodos([numero(1), numero(2)])
+    eventos.length = 0
+    g.pararExpedidores()
+    expect(eventos).toEqual(['exp-parar 1', 'exp-parar 2'])
+    expect(g.estados().size).toBe(2)
+  })
+
   it('parar durante um iniciar pendente: o expedidor não chega a iniciar; conexao.parar só depois do iniciar terminar', async () => {
     const eventos: string[] = []
     const comecouIniciar = deferido<void>()
@@ -108,8 +117,9 @@ describe('gerenciador de conexões', () => {
     await pAdicionar
     await pParar
 
-    // o expedidor nunca chegou a iniciar: adicionar() viu que a linha já tinha sido removida
-    expect(eventos).toEqual(['iniciar-inicio', 'iniciar-fim', 'exp-parar', 'parar'])
+    // o expedidor para na hora do parar() (nada mais sai deste número) e nunca chegou a iniciar:
+    // adicionar() viu que a linha já tinha sido removida; conexao.parar() espera o iniciar() na fila.
+    expect(eventos).toEqual(['iniciar-inicio', 'exp-parar', 'iniciar-fim', 'parar'])
     expect(g.estado(1)).toBeNull()
     expect(g.conexao(1)).toBeNull()
   })
@@ -207,7 +217,7 @@ describe('gerenciador de conexões', () => {
 
     // o adicionar que ficou na fila não chegou a criar outra conexão nem a religar o expedidor
     expect(criarChamadas).toBe(1)
-    expect(eventos).toEqual(['nova-inicio', 'nova-fim', 'exp-parar', 'parar'])
+    expect(eventos).toEqual(['nova-inicio', 'exp-parar', 'nova-fim', 'parar'])
     expect(g.estado(1)).toBeNull()
     expect(g.conexao(1)).toBeNull()
   })

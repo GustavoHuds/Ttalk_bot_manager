@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { abrirBanco } from '../src/db/banco.js'
 import { RepoGrupos } from '../src/db/grupos.js'
 import { RepoNumeros } from '../src/db/numeros.js'
-import { ExpedidorGrupos, duracaoDigitandoGrupo } from '../src/grupos/expedidor.js'
+import { ExpedidorGrupos, VALIDADE_SAIDA_GRUPO_MS, duracaoDigitandoGrupo } from '../src/grupos/expedidor.js'
 import type { ConexaoGrupos } from '../src/grupos/tipos.js'
 import { AGORA, log } from './ajuda.js'
 
@@ -81,6 +81,17 @@ describe('expedidor dos grupos', () => {
     const item = grupos.proximaSaida(2, 'a@g.us')!
     for (let i = 0; i < 3; i++) grupos.adiarSaida(item.id, 0)
     await exp.acordar()
+    expect(grupos.proximaSaida(2, 'a@g.us')).toBeNull()
+  })
+
+  it('mensagem parada na fila há mais de 30 minutos é descartada sem enviar; a seguinte sai', async () => {
+    const { exp, grupos, eventos, fila, tempo } = montar()
+    expect(VALIDADE_SAIDA_GRUPO_MS).toBe(30 * 60_000)
+    grupos.enfileirarSaida(2, 'a@g.us', JSON.stringify({ tipo: 'texto', texto: 'velha' }), tempo() - VALIDADE_SAIDA_GRUPO_MS - 1)
+    grupos.enfileirarSaida(2, 'a@g.us', JSON.stringify({ tipo: 'texto', texto: 'no limite' }), tempo() - VALIDADE_SAIDA_GRUPO_MS + 60_000)
+    fila('a@g.us', 'nova')
+    await exp.acordar()
+    expect(eventos.filter((e) => e.tipo === 'texto').map((e) => e.texto)).toEqual(['no limite', 'nova'])
     expect(grupos.proximaSaida(2, 'a@g.us')).toBeNull()
   })
 

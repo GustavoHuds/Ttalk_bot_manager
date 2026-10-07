@@ -163,7 +163,10 @@ async function desligar(sinal: string): Promise<void> {
   if (desligando) return
   desligando = true
   log.info({ sinal }, 'desligando')
+  // Primeiro para de enviar (nenhum envio novo começa), depois de aceitar pedidos do
+  // painel; só então espera os orquestradores e fecha as conexões e o banco.
   for (const t of timers) clearInterval(t)
+  gerenciador.pararExpedidores()
   await painel.close()
   await orquestrador.ocioso()
   await orquestradorGrupos.ocioso()
