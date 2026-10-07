@@ -13,8 +13,9 @@ import { criarPainel } from './painel/servidor.js'
 import { Alertas, VigiaConexao } from './rotinas/alerta.js'
 import { apagarBackupsAntigos, fazerBackup } from './rotinas/backup.js'
 import { aplicarRetencao } from './rotinas/retencao.js'
-import { ConexaoBaileys, pastaSessao } from './whatsapp/baileys.js'
+import { ConexaoBaileys } from './whatsapp/baileys.js'
 import { Expedidor } from './whatsapp/expedidor.js'
+import { moverSessaoAntiga, pastaSessaoNumero } from './whatsapp/gerenciador.js'
 
 const amb = lerAmbiente()
 // Logs nunca levam conteúdo de mensagem nem dados de candidato: só IDs.
@@ -23,6 +24,7 @@ const log = pino({ level: amb.logNivel, base: undefined })
 await mkdir(amb.dados, { recursive: true, mode: 0o700 })
 const db = abrirBanco(join(amb.dados, 'banco.sqlite'))
 const repo = new Repositorio(db)
+if (await moverSessaoAntiga(amb.dados)) log.info('sessão do WhatsApp movida para sessoes/1')
 const armazem = new ArmazemArquivos(amb.dados)
 
 // Bots ficam no banco e são editados pelo painel. Os YAML antigos só entram na primeira subida.
@@ -38,7 +40,7 @@ let expedidor: Expedidor | null = null
 const conexao: ConexaoBaileys = new ConexaoBaileys({
   numeroId: 1,
   papel: 'recrutamento',
-  pastaSessao: pastaSessao(amb.dados),
+  pastaSessao: pastaSessaoNumero(amb.dados, 1),
   repo,
   log,
   janelaMs: amb.janelaMs,

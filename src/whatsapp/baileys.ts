@@ -1,5 +1,4 @@
 import { cp, mkdir, rm } from 'node:fs/promises'
-import { join } from 'node:path'
 import makeWASocket, {
   Browsers,
   BufferJSON,
@@ -367,8 +366,4 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
     this.sock = null
     this.mudar({ status: 'desconectado', qr: null })
   }
-}
-
-export function pastaSessao(dados: string): string {
-  return join(dados, 'sessao')
 }

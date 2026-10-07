@@ -43,6 +43,8 @@ describe('backup', () => {
     new Repositorio(db).criarCandidatura(1, 'VEND-OUT26', 'x@s.whatsapp.net', null, null, AGORA)
     mkdirSync(join(dados, 'curriculos', 'VEND-OUT26'), { recursive: true })
     writeFileSync(join(dados, 'curriculos', 'VEND-OUT26', 'a.pdf'), PDF)
+    mkdirSync(join(dados, 'sessoes', '2'), { recursive: true })
+    writeFileSync(join(dados, 'sessoes', '2', 'creds.json'), '{"x":1}')
 
     const arquivo = await fazerBackup({ db, dados, senha: 'segredo-do-backup', agora: AGORA })
     expect(readFileSync(arquivo).includes(PDF)).toBe(false)
@@ -52,6 +54,7 @@ describe('backup', () => {
     const destino = pastaTemp()
     await restaurarBackup(arquivo, 'segredo-do-backup', destino)
     expect(readFileSync(join(destino, 'curriculos', 'VEND-OUT26', 'a.pdf'))).toEqual(PDF)
+    expect(readFileSync(join(destino, 'sessoes', '2', 'creds.json'), 'utf8')).toBe('{"x":1}')
     const banco = join(destino, 'backups', `.tmp-${AGORA}`, 'banco.sqlite')
     const restaurado = new Database(banco, { readonly: true })
     expect(restaurado.prepare('SELECT protocolo FROM candidaturas').get()).toEqual({ protocolo: 'VEND-OUT26-0001' })

@@ -29,7 +29,7 @@ export async function fazerBackup(o: { db: Banco; dados: string; senha: string; 
   const destino = join(pasta, `backup-${dia}.tar.gz.enc`)
   try {
     await o.db.backup(join(temp, 'banco.sqlite'))
-    const itens = [`backups/.tmp-${o.agora}/banco.sqlite`, 'curriculos', 'sessao'].filter((i) => existsSync(join(o.dados, i)))
+    const itens = [`backups/.tmp-${o.agora}/banco.sqlite`, 'curriculos', 'sessoes', 'sessao'].filter((i) => existsSync(join(o.dados, i)))
 
     const sal = randomBytes(TAM_SAL)
     const iv = randomBytes(TAM_IV)
