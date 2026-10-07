@@ -3,7 +3,7 @@ import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { dataBR } from './exportar.js'
 import { ROTULO_STATUS, esc, layout } from './paginas.js'
 
-const ROTULO_PAPEL: Record<Papel, string> = { recrutamento: 'Recrutamento', grupos: 'Grupos' }
+export const ROTULO_PAPEL: Record<Papel, string> = { recrutamento: 'Recrutamento', grupos: 'Grupos' }
 
 function status(n: Numero, e: EstadoConexao | null): string {
   if (!n.ativo) return '<span class="suave">desativado</span>'
@@ -33,7 +33,10 @@ export function paginaNumeros(itens: { numero: Numero; estado: EstadoConexao | n
   )
 }
 
-export function paginaNumero(n: Numero, e: EstadoConexao | null, qrImagem: string | null, usuario: string): string {
+export function paginaNumero(n: Numero, e: EstadoConexao | null, qrImagem: string | null, usuario: string, erro = false): string {
+  const avisoErro = erro
+    ? `<div class="cartao erro">Não foi possível falar com o WhatsApp agora — veja o log; o painel tentará de novo ao reiniciar.</div>`
+    : ''
   const qr = qrImagem
     ? `<div class="cartao"><p>No celular deste número: WhatsApp → <strong>Aparelhos conectados</strong> → <strong>Conectar aparelho</strong>, e aponte para o código. Ele muda a cada poucos segundos; a página atualiza sozinha.</p>
        <img src="${qrImagem}" alt="QR code de conexão" width="280" height="280" style="background:#fff;padding:8px;border-radius:8px"></div>`
@@ -47,6 +50,7 @@ export function paginaNumero(n: Numero, e: EstadoConexao | null, qrImagem: strin
     : `<form method="post" action="/numeros/${n.id}/ativar"><button class="primario">Ativar</button></form>`
   const corpo = `<p><a href="/numeros">← Números</a></p>
     <h1>${esc(n.nome)} <span class="etiqueta">${ROTULO_PAPEL[n.papel]}</span></h1>
+    ${avisoErro}
     <div class="cartao"><dl>
       <dt>Status</dt><dd>${status(n, e)}</dd>
       ${e ? `<dt>Desde</dt><dd>${esc(dataBR(e.desde))}</dd><dt>Telefone</dt><dd>${esc(e.numero ?? '—')}</dd>` : ''}

@@ -31,46 +31,72 @@ export function rotasNumeros(app: FastifyInstance, d: DependenciasPainel, a: Aju
       d.repo.auditar(a.usuario(req), 'criar_numero', `${criado.id} ${nome} (${papel})`, a.agora())
       return criado
     })
-    await d.conexoes.ativar(n)
+    try {
+      await d.conexoes.ativar(n)
+    } catch (err) {
+      req.log.error({ err, numero: n.id }, 'falha ao ativar número novo')
+      return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
+    }
     return rep.redirect(`/numeros/${n.id}`, 303)
   })
 
-  app.get<{ Params: { id: string } }>('/numeros/:id', async (req, rep) => {
+  app.get<{ Params: { id: string }; Querystring: { erro?: string } }>('/numeros/:id', async (req, rep) => {
     const n = achar(req.params.id)
     if (!n) return rep.code(404).send('Número não encontrado')
     const e = n.ativo ? d.conexoes.estado(n.id) : null
     const qr = e?.qr ? await QRCode.toDataURL(e.qr, { margin: 1, width: 280 }) : null
-    return a.html(rep, paginaNumero(n, e, qr, a.usuario(req)))
+    return a.html(rep, paginaNumero(n, e, qr, a.usuario(req), req.query.erro === '1'))
   })
 
   app.post<{ Params: { id: string } }>('/numeros/:id/nova-sessao', async (req, rep) => {
     const n = achar(req.params.id)
     if (!n) return rep.code(404).send('Número não encontrado')
     if (!n.ativo) return rep.code(409).send('Ative o número antes de gerar um QR.')
+    // Audita só depois de confirmar sucesso; se falhar, a auditoria registra a falha em vez da ação.
+    try {
+      await d.conexoes.novaSessao(n.id)
+    } catch (err) {
+      req.log.error({ err, numero: n.id }, 'falha ao gerar nova sessão')
+      d.repo.auditar(a.usuario(req), 'nova_sessao_falhou', `${n.id} ${n.nome}`, a.agora())
+      return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
+    }
     d.repo.auditar(a.usuario(req), 'nova_sessao', `${n.id} ${n.nome}`, a.agora())
-    await d.conexoes.novaSessao(n.id)
     return rep.redirect(`/numeros/${n.id}`, 303)
   })
 
   app.post<{ Params: { id: string } }>('/numeros/:id/ativar', async (req, rep) => {
     const n = achar(req.params.id)
     if (!n) return rep.code(404).send('Número não encontrado')
+    if (n.ativo) return rep.redirect(`/numeros/${n.id}`, 303) // já está ativo: nada a fazer
     d.repo.transacao(() => {
       d.numeros.definirAtivo(n.id, true)
       d.repo.auditar(a.usuario(req), 'ativar_numero', `${n.id} ${n.nome}`, a.agora())
     })
-    await d.conexoes.ativar({ ...n, ativo: true })
+    try {
+      await d.conexoes.ativar({ ...n, ativo: true })
+    } catch (err) {
+      // O banco já marcou o número como ativo; não desfazemos isso, só avisamos.
+      req.log.error({ err, numero: n.id }, 'falha ao ativar número')
+      return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
+    }
     return rep.redirect(`/numeros/${n.id}`, 303)
   })
 
   app.post<{ Params: { id: string } }>('/numeros/:id/desativar', async (req, rep) => {
     const n = achar(req.params.id)
     if (!n) return rep.code(404).send('Número não encontrado')
+    if (!n.ativo) return rep.redirect(`/numeros/${n.id}`, 303) // já está desativado: nada a fazer
     d.repo.transacao(() => {
       d.numeros.definirAtivo(n.id, false)
       d.repo.auditar(a.usuario(req), 'desativar_numero', `${n.id} ${n.nome}`, a.agora())
     })
-    await d.conexoes.desativar(n.id)
+    try {
+      await d.conexoes.desativar(n.id)
+    } catch (err) {
+      // O banco já marcou o número como desativado; não desfazemos isso, só avisamos.
+      req.log.error({ err, numero: n.id }, 'falha ao desativar número')
+      return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
+    }
     return rep.redirect(`/numeros/${n.id}`, 303)
   })
 }

@@ -4,6 +4,7 @@ import type { CandidatoPainel } from '../db/repositorio.js'
 import type { Numero } from '../db/numeros.js'
 import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { colunasDeResposta, dataBR } from './exportar.js'
+import { ROTULO_PAPEL } from './paginas-numeros.js'
 
 export function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -62,10 +63,11 @@ export function linkWaMe(numero: string, codigo: string): string {
   return `https://wa.me/${numero}?text=${encodeURIComponent(`Quero me candidatar [${codigo}]`)}`
 }
 
-/** Número de recrutamento como a lista de bots precisa: nome e telefone conectado. */
+/** Número de recrutamento como a lista de bots precisa: nome, se está ativo e telefone conectado. */
 export interface NumeroDosBots {
   id: number
   nome: string
+  ativo: boolean
   telefone: string | null
 }
 
@@ -83,11 +85,17 @@ export function paginaProcessos(
       const n = numeros.find((x) => x.id === p.numeroId)
       const link = n?.telefone ? linkWaMe(n.telefone, p.codigo) : null
       const cod = encodeURIComponent(p.codigo)
-      const qual = numeros.length > 1 && n ? `<br><span class="suave">${esc(n.nome)}</span>` : ''
+      const qual = numeros.length > 1 && n?.ativo ? `<br><span class="suave">${esc(n.nome)}</span>` : ''
+      const destino =
+        n && !n.ativo
+          ? `<span class="erro">número «${esc(n.nome)}» desativado</span>`
+          : link
+            ? `<code>${esc(link)}</code>`
+            : '<span class="suave">conecte o número para gerar</span>'
       return `<tr><td><strong>${esc(p.vaga)}</strong><br><span class="suave">${esc(p.codigo)}</span></td>
         <td>${ROTULO_SITUACAO[situacao(p, agora)]}</td><td>${periodo(p)}</td>
         <td><a href="/processos/${cod}">${r.concluidas} concluídas</a><br><span class="suave">${r.total - r.concluidas} incompletas</span></td>
-        <td>${link ? `<code>${esc(link)}</code>` : '<span class="suave">conecte o número para gerar</span>'}${qual}</td>
+        <td>${destino}${qual}</td>
         <td style="white-space:nowrap"><a class="botao" href="/bots/${cod}">Editar</a> <a class="botao" href="/bots/novo?de=${cod}">Copiar</a></td></tr>`
     })
     .join('')
@@ -169,7 +177,7 @@ export function paginaSaude(d: DadosSaude, usuario: string): string {
     .map(({ numero: n, estado: e, ultimaMensagem }) => {
       const cor = !n.ativo ? 'suave' : e?.status === 'conectado' ? 'ok' : 'erro'
       const status = !n.ativo ? 'desativado' : `${esc(ROTULO_STATUS[e?.status ?? 'iniciando'])}${e ? ` desde ${esc(dataBR(e.desde))}` : ''}`
-      return `<dt>${esc(n.nome)} <span class="suave">(${n.papel})</span></dt>
+      return `<dt>${esc(n.nome)} <span class="suave">(${ROTULO_PAPEL[n.papel]})</span></dt>
         <dd><span class="${cor}">${status}</span> · última mensagem: ${esc(ultimaMensagem ? dataBR(ultimaMensagem) : 'nenhuma')}</dd>`
     })
     .join('')

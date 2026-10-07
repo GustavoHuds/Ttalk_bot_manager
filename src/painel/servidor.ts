@@ -126,7 +126,11 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
 
   app.get<{ Querystring: { salvo?: string; excluido?: string } }>('/', async (req, rep) => {
     const aviso = req.query.salvo ? `Bot ${req.query.salvo} salvo.` : req.query.excluido ? `Bot ${req.query.excluido} excluído.` : null
-    const numeros = numerosRecrutamento().map((n) => ({ id: n.id, nome: n.nome, telefone: d.conexoes.estado(n.id)?.numero ?? null }))
+    // Todos os números de recrutamento entram aqui (mesmo desativados), para o aviso claro de cada bot.
+    const numeros = d.numeros
+      .listar()
+      .filter((n) => n.papel === 'recrutamento')
+      .map((n) => ({ id: n.id, nome: n.nome, ativo: n.ativo, telefone: n.ativo ? d.conexoes.estado(n.id)?.numero ?? null : null }))
     return html(rep, paginaProcessos(d.bots.get(), d.repo.resumoPorProcesso(), numeros, usuario(req), agora(), aviso))
   })
 

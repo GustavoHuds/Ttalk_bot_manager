@@ -16,7 +16,16 @@ import { AGORA, PDF, padrao, pastaTemp, processo } from './ajuda.js'
 
 const form = { 'content-type': 'application/x-www-form-urlencoded' }
 
-async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
+interface ConexoesFake {
+  estado: (id: number) => EstadoConexao | null
+  novaSessao: (id: number) => Promise<void>
+  ativar: (n: Numero) => Promise<void>
+  desativar: (id: number) => Promise<void>
+}
+
+// `conexoesExtra` permite a um teste substituir ativar/desativar/novaSessao por uma função que falha (rejeita),
+// para exercitar o tratamento de erro do gerenciador sem derrubar o resto da configuração.
+async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos, conexoesExtra: Partial<ConexoesFake> = {}) {
   const modelo = botModelo('2026-10-06')
   repo.salvarBot(
     'VEND-OUT26',
@@ -27,6 +36,13 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
   )
   const bots = new FonteBots(repo, padrao)
   const estados = new Map<number, EstadoConexao>([[1, { status: 'conectado', qr: null, desde: AGORA, numero: '5583900001111', motivo: null }]])
+  const conexoes: ConexoesFake = {
+    estado: (id) => estados.get(id) ?? null,
+    novaSessao: async () => {},
+    ativar: async (n: Numero) => void estados.set(n.id, { status: 'aguardando_qr', qr: 'QR-TESTE', desde: AGORA, numero: null, motivo: null }),
+    desativar: async (id) => void estados.delete(id),
+    ...conexoesExtra
+  }
   const app = await criarPainel({
     repo,
     numeros: new RepoNumeros(repo.db),
@@ -34,12 +50,7 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
     bots,
     relogio: () => AGORA,
     armazem,
-    conexoes: {
-      estado: (id) => estados.get(id) ?? null,
-      novaSessao: async () => {},
-      ativar: async (n: Numero) => void estados.set(n.id, { status: 'aguardando_qr', qr: 'QR-TESTE', desde: AGORA, numero: null, motivo: null }),
-      desativar: async (id) => void estados.delete(id)
-    },
+    conexoes,
     usuarios: new Map([['rh', hashSenha('senha-bem-longa')]]),
     segredo: 'x'.repeat(40),
     cookieSeguro: false,
@@ -321,6 +332,132 @@ describe('números', () => {
 
   it('/numeros sem cookie redireciona para /login', async () => {
     expect((await app.inject('/numeros')).headers.location).toBe('/login')
+  })
+
+  it('bot com número desativado mostra aviso em vez do link; número ativo some do aviso de "qual"', async () => {
+    new RepoNumeros(repo.db).definirAtivo(1, false)
+    const r = await app.inject({ url: '/', headers: { cookie } })
+    expect(r.body).toContain('número «Principal» desativado')
+    expect(r.body).not.toContain('wa.me')
+  })
+
+  it('ativar é no-op (sem auditoria) se já ativo; desativar é no-op se já desativado', async () => {
+    const antes = repo.auditoriaRecente(10).length
+    expect((await app.inject({ method: 'POST', url: '/numeros/1/ativar', headers: { cookie } })).statusCode).toBe(303)
+    expect(repo.auditoriaRecente(10)).toHaveLength(antes)
+
+    await app.inject({ method: 'POST', url: '/numeros/1/desativar', headers: { cookie } })
+    const depois = repo.auditoriaRecente(10).length
+    expect((await app.inject({ method: 'POST', url: '/numeros/1/desativar', headers: { cookie } })).statusCode).toBe(303)
+    expect(repo.auditoriaRecente(10)).toHaveLength(depois)
+  })
+
+  it('ativar liga a conexão e audita quando o número estava desativado', async () => {
+    await app.inject({ method: 'POST', url: '/numeros/1/desativar', headers: { cookie } })
+    const r = await app.inject({ method: 'POST', url: '/numeros/1/ativar', headers: { cookie } })
+    expect(r.statusCode).toBe(303)
+    expect(new RepoNumeros(repo.db).numero(1)!.ativo).toBe(true)
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'ativar_numero' })
+  })
+
+  it('nova sessão recusa número desativado com 409', async () => {
+    await app.inject({ method: 'POST', url: '/numeros/1/desativar', headers: { cookie } })
+    const r = await app.inject({ method: 'POST', url: '/numeros/1/nova-sessao', headers: { cookie } })
+    expect(r.statusCode).toBe(409)
+  })
+
+  it('id inválido em /numeros/:id dá 404', async () => {
+    expect((await app.inject({ url: '/numeros/abc', headers: { cookie } })).statusCode).toBe(404)
+    expect((await app.inject({ url: '/numeros/1e3', headers: { cookie } })).statusCode).toBe(404)
+  })
+
+  it('nome com HTML é escapado em /numeros e /saude', async () => {
+    new RepoNumeros(repo.db).criar('<script>x</script>', 'grupos', AGORA)
+    const lista = await app.inject({ url: '/numeros', headers: { cookie } })
+    expect(lista.body).not.toContain('<script>x</script>')
+    expect(lista.body).toContain('&lt;script&gt;')
+    const saude = await app.inject({ url: '/saude', headers: { cookie } })
+    expect(saude.body).not.toContain('<script>x</script>')
+    expect(saude.body).toContain('&lt;script&gt;')
+  })
+
+  it('/saude mostra o uso (papel) de cada número pelo rótulo', async () => {
+    new RepoNumeros(repo.db).criar('Avisos', 'grupos', AGORA)
+    const saude = await app.inject({ url: '/saude', headers: { cookie } })
+    expect(saude.body).toContain('Recrutamento')
+    expect(saude.body).toContain('Grupos')
+    expect(saude.body).not.toContain('(grupos)')
+  })
+
+  it('nome maior que 40 caracteres é recusado', async () => {
+    const r = await app.inject({ method: 'POST', url: '/numeros', headers: { ...form, cookie }, payload: `nome=${'A'.repeat(41)}&papel=grupos` })
+    expect(r.statusCode).toBe(400)
+  })
+})
+
+describe('números — falhas do gerenciador', () => {
+  let app: FastifyInstance
+  let repo: Repositorio
+  let cookie: string
+
+  it('falha ao ativar número novo redireciona com ?erro=1, audita a criação e não desfaz o banco', async () => {
+    repo = new Repositorio(abrirBanco(':memory:'))
+    ;({ app } = await painelComBot(repo, new ArmazemArquivos(pastaTemp()), {
+      ativar: async () => {
+        throw new Error('boom')
+      }
+    }))
+    cookie = await login(app)
+    const r = await app.inject({ method: 'POST', url: '/numeros', headers: { ...form, cookie }, payload: 'nome=Avisos&papel=grupos' })
+    expect(r.statusCode).toBe(303)
+    expect(r.headers.location).toBe('/numeros/2?erro=1')
+    expect(new RepoNumeros(repo.db).numero(2)).toMatchObject({ nome: 'Avisos', ativo: true })
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'criar_numero' })
+    const pagina = await app.inject({ url: '/numeros/2?erro=1', headers: { cookie } })
+    expect(pagina.body).toContain('Não foi possível')
+  })
+
+  it('falha ao ativar número existente não desfaz o banco', async () => {
+    repo = new Repositorio(abrirBanco(':memory:'))
+    ;({ app } = await painelComBot(repo, new ArmazemArquivos(pastaTemp()), {
+      ativar: async () => {
+        throw new Error('boom')
+      }
+    }))
+    cookie = await login(app)
+    await app.inject({ method: 'POST', url: '/numeros/1/desativar', headers: { cookie } })
+    const r = await app.inject({ method: 'POST', url: '/numeros/1/ativar', headers: { cookie } })
+    expect(r.statusCode).toBe(303)
+    expect(r.headers.location).toBe('/numeros/1?erro=1')
+    expect(new RepoNumeros(repo.db).numero(1)!.ativo).toBe(true)
+  })
+
+  it('falha ao desativar não desfaz o banco', async () => {
+    repo = new Repositorio(abrirBanco(':memory:'))
+    ;({ app } = await painelComBot(repo, new ArmazemArquivos(pastaTemp()), {
+      desativar: async () => {
+        throw new Error('boom')
+      }
+    }))
+    cookie = await login(app)
+    const r = await app.inject({ method: 'POST', url: '/numeros/1/desativar', headers: { cookie } })
+    expect(r.statusCode).toBe(303)
+    expect(r.headers.location).toBe('/numeros/1?erro=1')
+    expect(new RepoNumeros(repo.db).numero(1)!.ativo).toBe(false)
+  })
+
+  it('falha ao gerar nova sessão audita "nova_sessao_falhou" em vez de "nova_sessao"', async () => {
+    repo = new Repositorio(abrirBanco(':memory:'))
+    ;({ app } = await painelComBot(repo, new ArmazemArquivos(pastaTemp()), {
+      novaSessao: async () => {
+        throw new Error('boom')
+      }
+    }))
+    cookie = await login(app)
+    const r = await app.inject({ method: 'POST', url: '/numeros/1/nova-sessao', headers: { cookie } })
+    expect(r.statusCode).toBe(303)
+    expect(r.headers.location).toBe('/numeros/1?erro=1')
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'nova_sessao_falhou' })
   })
 })
 
