@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { ArmazemArquivos } from '../src/arquivos.js'
 import { FonteBots, botModelo } from '../src/config/bots.js'
 import { abrirBanco } from '../src/db/banco.js'
+import { RepoNumeros } from '../src/db/numeros.js'
 import { Repositorio } from '../src/db/repositorio.js'
 import { hashSenha } from '../src/painel/auth.js'
 import { celula, gerarCsv } from '../src/painel/exportar.js'
@@ -18,6 +19,7 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
   repo.salvarBot(
     'VEND-OUT26',
     JSON.stringify({ ...modelo, codigo: 'VEND-OUT26', vaga: 'Vendedor(a) de loja', status: 'aberto', encerra_em: '2026-10-31' }),
+    1,
     'teste',
     AGORA
   )
@@ -25,6 +27,7 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
   const app = await criarPainel({
     repo,
     bots,
+    numeros: new RepoNumeros(repo.db),
     relogio: () => AGORA,
     armazem,
     conexao: {
@@ -50,7 +53,7 @@ describe('painel', () => {
   beforeEach(async () => {
     repo = new Repositorio(abrirBanco(':memory:'))
     armazem = new ArmazemArquivos(pastaTemp())
-    const id = repo.criarCandidatura('VEND-OUT26', 'x@s.whatsapp.net', '5583999990000', null, AGORA)
+    const id = repo.criarCandidatura(1, 'VEND-OUT26', 'x@s.whatsapp.net', '5583999990000', null, AGORA)
     repo.salvarResposta(id, 'nome', '=HYPERLINK("http://mal")', AGORA)
     repo.registrarArquivo(id, await armazem.salvar('VEND-OUT26', 'pdf', 'application/pdf', PDF, AGORA), AGORA)
     repo.concluir(id, AGORA)
@@ -219,11 +222,23 @@ describe('editor de bots', () => {
 
   it('só exclui bot sem candidaturas', async () => {
     await salvar(novo(), 'aberto')
-    repo.criarCandidatura('CAIXA-NOV26', 'x@s.whatsapp.net', null, null, AGORA)
+    repo.criarCandidatura(1, 'CAIXA-NOV26', 'x@s.whatsapp.net', null, null, AGORA)
     expect((await app.inject({ method: 'POST', url: '/bots/CAIXA-NOV26/excluir', headers: { cookie } })).statusCode).toBe(409)
     repo.excluirProcesso('CAIXA-NOV26')
     expect((await app.inject({ method: 'POST', url: '/bots/CAIXA-NOV26/excluir', headers: { cookie } })).statusCode).toBe(303)
     expect(bots.get().processos).toEqual([])
+  })
+
+  it('bot fica no número escolhido; número de grupos não aparece e é recusado', async () => {
+    const numeros = new RepoNumeros(repo.db)
+    const sul = numeros.criar('Loja Sul', 'recrutamento', AGORA)
+    const avisos = numeros.criar('Avisos', 'grupos', AGORA)
+    expect((await salvar(novo({ numero_id: avisos.id }), 'aberto')).body).toContain('número de recrutamento')
+    expect((await salvar(novo({ numero_id: sul.id }), 'aberto')).statusCode).toBe(303)
+    expect(bots.get().processos[0]!.numeroId).toBe(sul.id)
+    const form = await app.inject({ url: '/bots/CAIXA-NOV26', headers: { cookie } })
+    expect(form.body).toContain(`<option value="${sul.id}" selected>Loja Sul</option>`)
+    expect(form.body).not.toContain('Avisos')
   })
 })
 

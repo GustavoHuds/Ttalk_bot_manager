@@ -19,6 +19,8 @@ export interface Processo {
   /** Fim do dia de encerramento (ms, horário de Brasília). */
   encerraEm: number
   retencaoMeses: number
+  /** Número de WhatsApp que atende este bot. */
+  numeroId: number
   perguntas: Pergunta[]
   mensagens: Mensagens
   arquivoOrigem: string

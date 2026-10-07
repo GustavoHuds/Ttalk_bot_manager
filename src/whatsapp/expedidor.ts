@@ -1,6 +1,7 @@
 import type { Logger } from 'pino'
 import type { Envio } from '../conversa/orquestrador.js'
 import type { Repositorio } from '../db/repositorio.js'
+import { LimitePorMinuto } from './limite.js'
 
 /** O que o expedidor precisa de uma conexão de WhatsApp (Baileys hoje, outra amanhã). */
 export interface ConexaoEnvio {
@@ -11,6 +12,7 @@ export interface ConexaoEnvio {
 }
 
 export interface OpcoesExpedidor {
+  numeroId: number
   repo: Repositorio
   conexao: ConexaoEnvio
   log: Logger
@@ -31,23 +33,22 @@ export function duracaoDigitando(texto: string): number {
 
 /**
  * Esvazia a caixa de saída imitando um atendente: marca "digitando", respeita
- * 1,5 s entre mensagens da mesma conversa e no máximo 20 envios por minuto no total.
+ * 1,5 s entre mensagens da mesma conversa e no máximo 20 envios por minuto por número.
  */
 export class Expedidor {
   private ativos = new Set<string>()
-  private envios: number[] = []
   private ultimoPorJid = new Map<string, number>()
   private timer: NodeJS.Timeout | null = null
   private readonly relogio: () => number
   private readonly esperar: (ms: number) => Promise<void>
   private readonly intervalo: number
-  private readonly limite: number
+  private readonly limite: LimitePorMinuto
 
   constructor(private readonly o: OpcoesExpedidor) {
     this.relogio = o.relogio ?? Date.now
     this.esperar = o.esperar ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
     this.intervalo = o.intervaloPorConversaMs ?? 1500
-    this.limite = o.limitePorMinuto ?? 20
+    this.limite = new LimitePorMinuto(o.limitePorMinuto ?? 20, this.relogio, this.esperar)
   }
 
   iniciar(): void {
@@ -61,7 +62,7 @@ export class Expedidor {
   /** Começa a drenar as conversas com mensagens prontas. Devolve quando todas terminarem. */
   async acordar(): Promise<void> {
     if (!this.o.conexao.pronta()) return
-    const novas = this.o.repo.jidsComSaida(this.relogio()).filter((j) => !this.ativos.has(j))
+    const novas = this.o.repo.jidsComSaida(this.o.numeroId, this.relogio()).filter((j) => !this.ativos.has(j))
     await Promise.all(novas.map((jid) => this.drenar(jid)))
   }
 
@@ -70,10 +71,10 @@ export class Expedidor {
     try {
       for (;;) {
         if (!this.o.conexao.pronta()) return
-        const item = this.o.repo.proximaSaida(jid)
+        const item = this.o.repo.proximaSaida(this.o.numeroId, jid)
         if (!item || item.proximaEm > this.relogio()) return
 
-        const conversa = this.o.repo.conversa(jid)
+        const conversa = this.o.repo.conversa(this.o.numeroId, jid)
         if (!conversa || this.relogio() - conversa.ultimaRecebida > this.o.janelaMs) {
           // Nunca iniciar conversa: resposta atrasada demais é descartada.
           this.o.log.warn({ saida: item.id }, 'resposta fora da janela descartada')
@@ -82,7 +83,7 @@ export class Expedidor {
         }
 
         const envio = JSON.parse(item.conteudo) as Envio
-        await this.reservarVaga()
+        await this.limite.reservar()
         try {
           await this.o.conexao.digitando(jid)
           await this.esperar(duracaoDigitando(envio.tipo === 'texto' ? envio.texto : envio.pergunta))
@@ -107,19 +108,6 @@ export class Expedidor {
     } finally {
       this.ativos.delete(jid)
       this.limparMapa()
-    }
-  }
-
-  /** Janela deslizante de 60 s para o limite global; a vaga é reservada antes de esperar. */
-  private async reservarVaga(): Promise<void> {
-    for (;;) {
-      const agora = this.relogio()
-      this.envios = this.envios.filter((t) => agora - t < 60_000)
-      if (this.envios.length < this.limite) {
-        this.envios.push(agora)
-        return
-      }
-      await this.esperar(this.envios[0]! + 60_000 - agora)
     }
   }
 

@@ -65,59 +65,66 @@ export class Repositorio {
 
   // --- caixa de entrada ----------------------------------------------------------
 
-  /** Grava a mensagem antes de processar. Devolve false se o ID já foi visto. */
-  registrarRecebida(id: string, jid: string, recebidaEm: number, payload: string): boolean {
+  /** Grava a mensagem antes de processar. Devolve false se o ID já foi visto neste número. */
+  registrarRecebida(numeroId: number, id: string, jid: string, recebidaEm: number, payload: string): boolean {
     const r = this.db
-      .prepare(`INSERT OR IGNORE INTO mensagens_processadas (id, jid, recebida_em, status, payload) VALUES (?, ?, ?, 'pendente', ?)`)
-      .run(id, jid, recebidaEm, payload)
-    if (r.changes === 1) this.tocarConversa(jid, recebidaEm)
+      .prepare(
+        `INSERT OR IGNORE INTO mensagens_processadas (numero_id, id, jid, recebida_em, status, payload) VALUES (?, ?, ?, ?, 'pendente', ?)`
+      )
+      .run(numeroId, id, jid, recebidaEm, payload)
+    if (r.changes === 1) this.tocarConversa(numeroId, jid, recebidaEm)
     return r.changes === 1
   }
 
-  pendentes(): { id: string; jid: string }[] {
+  pendentes(): { numeroId: number; id: string; jid: string }[] {
     return this.db
-      .prepare(`SELECT id, jid FROM mensagens_processadas WHERE status = 'pendente' ORDER BY recebida_em, rowid`)
-      .all() as { id: string; jid: string }[]
+      .prepare(`SELECT numero_id AS numeroId, id, jid FROM mensagens_processadas WHERE status = 'pendente' ORDER BY recebida_em, rowid`)
+      .all() as { numeroId: number; id: string; jid: string }[]
   }
 
-  lerPendente(id: string): { jid: string; payload: string; tentativas: number; recebidaEm: number } | null {
+  lerPendente(numeroId: number, id: string): { jid: string; payload: string; tentativas: number; recebidaEm: number } | null {
     const r = this.db
-      .prepare(`SELECT jid, payload, tentativas, recebida_em AS recebidaEm FROM mensagens_processadas WHERE id = ? AND status = 'pendente'`)
-      .get(id) as { jid: string; payload: string; tentativas: number; recebidaEm: number } | undefined
+      .prepare(
+        `SELECT jid, payload, tentativas, recebida_em AS recebidaEm FROM mensagens_processadas
+         WHERE numero_id = ? AND id = ? AND status = 'pendente'`
+      )
+      .get(numeroId, id) as { jid: string; payload: string; tentativas: number; recebidaEm: number } | undefined
     return r ?? null
   }
 
   /** O conteúdo é apagado assim que processado: no banco fica só o ID, para descartar repetidas. */
-  marcarProcessada(id: string): void {
-    this.db.prepare(`UPDATE mensagens_processadas SET status = 'processada', payload = NULL WHERE id = ?`).run(id)
+  marcarProcessada(numeroId: number, id: string): void {
+    this.db
+      .prepare(`UPDATE mensagens_processadas SET status = 'processada', payload = NULL WHERE numero_id = ? AND id = ?`)
+      .run(numeroId, id)
   }
 
-  registrarFalha(id: string, desistir: boolean): void {
+  registrarFalha(numeroId: number, id: string, desistir: boolean): void {
     this.db
       .prepare(
         `UPDATE mensagens_processadas SET tentativas = tentativas + 1,
            status = CASE WHEN ? THEN 'erro' ELSE status END,
            payload = CASE WHEN ? THEN NULL ELSE payload END
-         WHERE id = ?`
+         WHERE numero_id = ? AND id = ?`
       )
-      .run(desistir ? 1 : 0, desistir ? 1 : 0, id)
+      .run(desistir ? 1 : 0, desistir ? 1 : 0, numeroId, id)
   }
 
   // --- conversa ------------------------------------------------------------------
 
-  private tocarConversa(jid: string, em: number): void {
+  private tocarConversa(numeroId: number, jid: string, em: number): void {
     this.db
       .prepare(
-        `INSERT INTO conversas (jid, ultima_recebida) VALUES (?, ?)
-         ON CONFLICT (jid) DO UPDATE SET ultima_recebida = MAX(ultima_recebida, excluded.ultima_recebida)`
+        `INSERT INTO conversas (numero_id, jid, ultima_recebida) VALUES (?, ?, ?)
+         ON CONFLICT (numero_id, jid) DO UPDATE SET ultima_recebida = MAX(ultima_recebida, excluded.ultima_recebida)`
       )
-      .run(jid, em)
+      .run(numeroId, jid, em)
   }
 
-  conversa(jid: string): { candidaturaId: number | null; estado: EstadoConversa | null; ultimaRecebida: number } | null {
-    const r = this.db.prepare(`SELECT candidatura_id, estado, ultima_recebida FROM conversas WHERE jid = ?`).get(jid) as
-      | { candidatura_id: number | null; estado: string | null; ultima_recebida: number }
-      | undefined
+  conversa(numeroId: number, jid: string): { candidaturaId: number | null; estado: EstadoConversa | null; ultimaRecebida: number } | null {
+    const r = this.db
+      .prepare(`SELECT candidatura_id, estado, ultima_recebida FROM conversas WHERE numero_id = ? AND jid = ?`)
+      .get(numeroId, jid) as { candidatura_id: number | null; estado: string | null; ultima_recebida: number } | undefined
     if (!r) return null
     return {
       candidaturaId: r.candidatura_id,
@@ -126,18 +133,22 @@ export class Repositorio {
     }
   }
 
-  definirEstado(jid: string, estado: EstadoConversa | null): void {
-    this.db.prepare(`UPDATE conversas SET estado = ? WHERE jid = ?`).run(estado ? JSON.stringify(estado) : null, jid)
+  definirEstado(numeroId: number, jid: string, estado: EstadoConversa | null): void {
+    this.db
+      .prepare(`UPDATE conversas SET estado = ? WHERE numero_id = ? AND jid = ?`)
+      .run(estado ? JSON.stringify(estado) : null, numeroId, jid)
   }
 
-  focar(jid: string, candidaturaId: number): void {
-    this.db.prepare(`UPDATE conversas SET candidatura_id = ? WHERE jid = ?`).run(candidaturaId, jid)
+  focar(numeroId: number, jid: string, candidaturaId: number): void {
+    this.db.prepare(`UPDATE conversas SET candidatura_id = ? WHERE numero_id = ? AND jid = ?`).run(candidaturaId, numeroId, jid)
   }
 
   // --- candidaturas ----------------------------------------------------------------
 
-  candidaturasDoContato(jid: string): CandidaturaVista[] {
-    const linhas = this.db.prepare(`SELECT * FROM candidaturas WHERE jid = ? ORDER BY id`).all(jid) as LinhaCandidatura[]
+  candidaturasDoContato(numeroId: number, jid: string): CandidaturaVista[] {
+    const linhas = this.db
+      .prepare(`SELECT * FROM candidaturas WHERE numero_id = ? AND jid = ? ORDER BY id`)
+      .all(numeroId, jid) as LinhaCandidatura[]
     return linhas.map((l) => this.vista(l))
   }
 
@@ -171,7 +182,7 @@ export class Repositorio {
     return Object.fromEntries(linhas.map((r) => [r.chave, r.valor]))
   }
 
-  criarCandidatura(processo: string, jid: string, telefone: string | null, lid: string | null, agora: number): number {
+  criarCandidatura(numeroId: number, processo: string, jid: string, telefone: string | null, lid: string | null, agora: number): number {
     const { ultimo } = this.db
       .prepare(
         `INSERT INTO contadores (processo, ultimo) VALUES (?, 1)
@@ -181,10 +192,10 @@ export class Repositorio {
     const protocolo = `${processo}-${String(ultimo).padStart(4, '0')}`
     const r = this.db
       .prepare(
-        `INSERT INTO candidaturas (processo, protocolo, jid, telefone, lid, passo, status, criada_em, atualizada_em, ultima_interacao)
-         VALUES (?, ?, ?, ?, ?, '', 'em_andamento', ?, ?, ?)`
+        `INSERT INTO candidaturas (numero_id, processo, protocolo, jid, telefone, lid, passo, status, criada_em, atualizada_em, ultima_interacao)
+         VALUES (?, ?, ?, ?, ?, ?, '', 'em_andamento', ?, ?, ?)`
       )
-      .run(processo, protocolo, jid, telefone, lid, agora, agora, agora)
+      .run(numeroId, processo, protocolo, jid, telefone, lid, agora, agora, agora)
     return Number(r.lastInsertRowid)
   }
 
@@ -210,9 +221,11 @@ export class Repositorio {
   }
 
   /** Completa telefone/LID quando a conexão passa a conhecê-los. */
-  completarIdentidade(jid: string, telefone: string | null, lid: string | null): void {
-    if (telefone) this.db.prepare(`UPDATE candidaturas SET telefone = ? WHERE jid = ? AND telefone IS NULL`).run(telefone, jid)
-    if (lid) this.db.prepare(`UPDATE candidaturas SET lid = ? WHERE jid = ? AND lid IS NULL`).run(lid, jid)
+  completarIdentidade(numeroId: number, jid: string, telefone: string | null, lid: string | null): void {
+    if (telefone) {
+      this.db.prepare(`UPDATE candidaturas SET telefone = ? WHERE numero_id = ? AND jid = ? AND telefone IS NULL`).run(telefone, numeroId, jid)
+    }
+    if (lid) this.db.prepare(`UPDATE candidaturas SET lid = ? WHERE numero_id = ? AND jid = ? AND lid IS NULL`).run(lid, numeroId, jid)
   }
 
   concluir(id: number, agora: number): void {
@@ -225,10 +238,10 @@ export class Repositorio {
     this.db.prepare(`UPDATE candidaturas SET finalizar_em = ? WHERE id = ?`).run(em, id)
   }
 
-  paraFinalizar(agora: number): { id: number; jid: string }[] {
+  paraFinalizar(agora: number): { id: number; numeroId: number; jid: string }[] {
     return this.db
-      .prepare(`SELECT id, jid FROM candidaturas WHERE finalizar_em IS NOT NULL AND finalizar_em <= ?`)
-      .all(agora) as { id: number; jid: string }[]
+      .prepare(`SELECT id, numero_id AS numeroId, jid FROM candidaturas WHERE finalizar_em IS NOT NULL AND finalizar_em <= ?`)
+      .all(agora) as { id: number; numeroId: number; jid: string }[]
   }
 
   registrarArquivo(candidaturaId: number, a: NovoArquivo, agora: number): void {
@@ -267,7 +280,7 @@ export class Repositorio {
     return caminhos
   }
 
-  /** Exclusão a pedido do candidato: tudo que estiver ligado ao número ou ao chat. */
+  /** Exclusão a pedido do candidato: tudo que estiver ligado ao número ou ao chat. Vale para todos os números: o pedido é da pessoa, não do chat. */
   excluirDadosDoContato(jid: string, telefone: string | null): string[] {
     const ids = (
       this.db.prepare(`SELECT id FROM candidaturas WHERE jid = ? OR (telefone IS NOT NULL AND telefone = ?)`).all(jid, telefone) as {
@@ -290,21 +303,25 @@ export class Repositorio {
 
   // --- caixa de saída ---------------------------------------------------------------
 
-  enfileirarSaida(jid: string, conteudo: string, agora: number): void {
-    this.db.prepare(`INSERT INTO saida (jid, conteudo, criada_em) VALUES (?, ?, ?)`).run(jid, conteudo, agora)
+  enfileirarSaida(numeroId: number, jid: string, conteudo: string, agora: number): void {
+    this.db.prepare(`INSERT INTO saida (numero_id, jid, conteudo, criada_em) VALUES (?, ?, ?, ?)`).run(numeroId, jid, conteudo, agora)
   }
 
-  jidsComSaida(agora: number): string[] {
+  jidsComSaida(numeroId: number, agora: number): string[] {
     return (
-      this.db.prepare(`SELECT DISTINCT jid FROM saida WHERE proxima_em <= ? ORDER BY id`).all(agora) as { jid: string }[]
+      this.db
+        .prepare(`SELECT DISTINCT jid FROM saida WHERE numero_id = ? AND proxima_em <= ? ORDER BY id`)
+        .all(numeroId, agora) as { jid: string }[]
     ).map((r) => r.jid)
   }
 
   /** Mensagens saem na ordem em que foram criadas; uma com reenvio agendado segura as de trás. */
-  proximaSaida(jid: string): (ItemSaida & { proximaEm: number }) | null {
+  proximaSaida(numeroId: number, jid: string): (ItemSaida & { proximaEm: number }) | null {
     const r = this.db
-      .prepare(`SELECT id, jid, conteudo, tentativas, proxima_em AS proximaEm FROM saida WHERE jid = ? ORDER BY id LIMIT 1`)
-      .get(jid) as (ItemSaida & { proximaEm: number }) | undefined
+      .prepare(
+        `SELECT id, jid, conteudo, tentativas, proxima_em AS proximaEm FROM saida WHERE numero_id = ? AND jid = ? ORDER BY id LIMIT 1`
+      )
+      .get(numeroId, jid) as (ItemSaida & { proximaEm: number }) | undefined
     return r ?? null
   }
 
@@ -318,25 +335,29 @@ export class Repositorio {
 
   // --- enquetes e mensagens enviadas -------------------------------------------------
 
-  salvarEnquete(id: string, jid: string, chave: string, opcoes: string[], segredo: Uint8Array, agora: number): void {
+  salvarEnquete(numeroId: number, id: string, jid: string, chave: string, opcoes: string[], segredo: Uint8Array, agora: number): void {
     this.db
-      .prepare(`INSERT OR REPLACE INTO enquetes (id, jid, chave, opcoes, segredo, criada_em) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(id, jid, chave, JSON.stringify(opcoes), Buffer.from(segredo), agora)
+      .prepare(`INSERT OR REPLACE INTO enquetes (numero_id, id, jid, chave, opcoes, segredo, criada_em) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(numeroId, id, jid, chave, JSON.stringify(opcoes), Buffer.from(segredo), agora)
   }
 
-  enquete(id: string): { jid: string; chave: string; opcoes: string[]; segredo: Buffer } | null {
-    const r = this.db.prepare(`SELECT jid, chave, opcoes, segredo FROM enquetes WHERE id = ?`).get(id) as
+  enquete(numeroId: number, id: string): { jid: string; chave: string; opcoes: string[]; segredo: Buffer } | null {
+    const r = this.db.prepare(`SELECT jid, chave, opcoes, segredo FROM enquetes WHERE numero_id = ? AND id = ?`).get(numeroId, id) as
       | { jid: string; chave: string; opcoes: string; segredo: Buffer }
       | undefined
     return r ? { ...r, opcoes: JSON.parse(r.opcoes) as string[] } : null
   }
 
-  salvarEnviada(id: string, conteudo: string, agora: number): void {
-    this.db.prepare(`INSERT OR REPLACE INTO enviadas (id, conteudo, criada_em) VALUES (?, ?, ?)`).run(id, conteudo, agora)
+  salvarEnviada(numeroId: number, id: string, conteudo: string, agora: number): void {
+    this.db
+      .prepare(`INSERT OR REPLACE INTO enviadas (numero_id, id, conteudo, criada_em) VALUES (?, ?, ?, ?)`)
+      .run(numeroId, id, conteudo, agora)
   }
 
-  enviada(id: string): string | null {
-    const r = this.db.prepare(`SELECT conteudo FROM enviadas WHERE id = ?`).get(id) as { conteudo: string } | undefined
+  enviada(numeroId: number, id: string): string | null {
+    const r = this.db.prepare(`SELECT conteudo FROM enviadas WHERE numero_id = ? AND id = ?`).get(numeroId, id) as
+      | { conteudo: string }
+      | undefined
     return r?.conteudo ?? null
   }
 
@@ -399,10 +420,13 @@ export class Repositorio {
 
   // --- bots ---------------------------------------------------------------------------
 
-  listarBots(): { codigo: string; dados: string; atualizadoEm: number; atualizadoPor: string }[] {
+  listarBots(): { codigo: string; dados: string; numeroId: number; atualizadoEm: number; atualizadoPor: string }[] {
     return this.db
-      .prepare(`SELECT codigo, dados, atualizado_em AS atualizadoEm, atualizado_por AS atualizadoPor FROM processos ORDER BY criado_em, codigo`)
-      .all() as { codigo: string; dados: string; atualizadoEm: number; atualizadoPor: string }[]
+      .prepare(
+        `SELECT codigo, dados, numero_id AS numeroId, atualizado_em AS atualizadoEm, atualizado_por AS atualizadoPor
+         FROM processos ORDER BY criado_em, codigo`
+      )
+      .all() as { codigo: string; dados: string; numeroId: number; atualizadoEm: number; atualizadoPor: string }[]
   }
 
   bot(codigo: string): string | null {
@@ -410,13 +434,14 @@ export class Repositorio {
     return r?.dados ?? null
   }
 
-  salvarBot(codigo: string, dados: string, usuario: string, agora: number): void {
+  salvarBot(codigo: string, dados: string, numeroId: number, usuario: string, agora: number): void {
     this.db
       .prepare(
-        `INSERT INTO processos (codigo, dados, criado_em, atualizado_em, atualizado_por) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (codigo) DO UPDATE SET dados = excluded.dados, atualizado_em = excluded.atualizado_em, atualizado_por = excluded.atualizado_por`
+        `INSERT INTO processos (codigo, dados, numero_id, criado_em, atualizado_em, atualizado_por) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (codigo) DO UPDATE SET dados = excluded.dados, numero_id = excluded.numero_id,
+           atualizado_em = excluded.atualizado_em, atualizado_por = excluded.atualizado_por`
       )
-      .run(codigo, dados, agora, agora, usuario)
+      .run(codigo, dados, numeroId, agora, agora, usuario)
   }
 
   excluirBot(codigo: string): void {
@@ -439,6 +464,13 @@ export class Repositorio {
   ultimaRecebida(): number | null {
     const r = this.db.prepare(`SELECT MAX(recebida_em) AS m FROM mensagens_processadas`).get() as { m: number | null }
     return r.m
+  }
+
+  ultimaRecebidaPorNumero(): Map<number, number> {
+    const linhas = this.db
+      .prepare(`SELECT numero_id AS n, MAX(recebida_em) AS m FROM mensagens_processadas GROUP BY numero_id`)
+      .all() as { n: number; m: number }[]
+    return new Map(linhas.map((l) => [l.n, l.m]))
   }
 
   processosComDados(): string[] {

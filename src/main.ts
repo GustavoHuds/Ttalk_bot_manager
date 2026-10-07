@@ -7,6 +7,7 @@ import { FonteBots } from './config/bots.js'
 import { lerPadrao, lerYamlProcessos } from './config/carregar.js'
 import { Orquestrador } from './conversa/orquestrador.js'
 import { abrirBanco } from './db/banco.js'
+import { RepoNumeros } from './db/numeros.js'
 import { Repositorio } from './db/repositorio.js'
 import { criarPainel } from './painel/servidor.js'
 import { Alertas, VigiaConexao } from './rotinas/alerta.js'
@@ -35,6 +36,7 @@ const vigia = new VigiaConexao(alertas)
 
 let expedidor: Expedidor | null = null
 const conexao: ConexaoBaileys = new ConexaoBaileys({
+  numeroId: 1,
   pastaSessao: pastaSessao(amb.dados),
   repo,
   log,
@@ -49,13 +51,13 @@ const conexao: ConexaoBaileys = new ConexaoBaileys({
 const orquestrador = new Orquestrador({
   repo,
   config: () => config.get(),
-  baixarMidia: (bruto) => conexao.baixarMidia(bruto),
+  baixarMidia: (_numeroId, bruto) => conexao.baixarMidia(bruto),
   armazem,
   log,
   aoEnfileirar: () => void expedidor?.acordar()
 })
 
-expedidor = new Expedidor({ repo, conexao, log, janelaMs: amb.janelaMs })
+expedidor = new Expedidor({ numeroId: 1, repo, conexao, log, janelaMs: amb.janelaMs })
 
 orquestrador.retomarPendentes()
 await conexao.iniciar()
@@ -95,6 +97,7 @@ async function rotinaDiaria(): Promise<void> {
 const painel = await criarPainel({
   repo,
   bots: config,
+  numeros: new RepoNumeros(db),
   armazem,
   conexao: { estado: () => conexao.estadoAtual, novaSessao: () => conexao.novaSessao() },
   usuarios: amb.painelUsuarios,

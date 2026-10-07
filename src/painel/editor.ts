@@ -10,6 +10,8 @@ export interface OpcoesEditor {
   candidaturas: number
   erro: string | null
   usuario: string
+  /** Números de recrutamento que o bot pode usar. */
+  numeros: { id: number; nome: string }[]
 }
 
 /** JSON dentro de <script> sem permitir fechar a tag. */
@@ -66,6 +68,9 @@ export function paginaEditorBot(o: OpcoesEditor): string {
       <div class="grade">
         <label>Nome da vaga<input id="vaga" value="${esc(d.vaga)}" required placeholder="Vendedor(a) de loja"></label>
         <label>Código (vai no link)<input id="codigo" value="${esc(d.codigo)}" ${editando ? 'readonly' : ''} required pattern="[A-Za-z0-9][A-Za-z0-9\\-]{1,30}" placeholder="VEND-OUT26"></label>
+        <label>Número do WhatsApp<select id="numero_id">${o.numeros
+          .map((n) => `<option value="${n.id}"${n.id === d.numero_id ? ' selected' : ''}>${esc(n.nome)}</option>`)
+          .join('')}</select></label>
         <label>Abre em<input id="abre_em" type="date" value="${esc(d.abre_em ?? '')}"></label>
         <label>Encerra em<input id="encerra_em" type="date" value="${esc(d.encerra_em)}" required></label>
         <label>Guardar dados por (meses)<input id="retencao_meses" type="number" min="1" max="60" value="${esc(d.retencao_meses)}" required></label>
@@ -156,7 +161,7 @@ const SCRIPT = `
       tamanho_max_mb:Number(v('cv_tamanho'))});
     var mensagens={};
     [].forEach.call(document.querySelectorAll('[data-msg]'),function(t){if(t.value.trim())mensagens[t.dataset.msg]=t.value;});
-    document.getElementById('dados').value=JSON.stringify({codigo:v('codigo'),vaga:v('vaga'),abre_em:v('abre_em')||null,
+    document.getElementById('dados').value=JSON.stringify({codigo:v('codigo'),numero_id:Number(v('numero_id')),vaga:v('vaga'),abre_em:v('abre_em')||null,
       encerra_em:v('encerra_em'),retencao_meses:Number(v('retencao_meses')),perguntas:perguntas,mensagens:mensagens});
   });
 })();

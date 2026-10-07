@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 import type { ArmazemArquivos } from '../arquivos.js'
 import { botModelo, paraEditor, prepararBot, type FonteBots } from '../config/bots.js'
 import type { StatusProcesso } from '../config/tipos.js'
+import type { RepoNumeros } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
 import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { LimiteLogin, senhaConfere } from './auth.js'
@@ -23,6 +24,7 @@ import {
 export interface DependenciasPainel {
   repo: Repositorio
   bots: FonteBots
+  numeros: RepoNumeros
   armazem: ArmazemArquivos
   conexao: { estado: () => EstadoConexao; novaSessao: () => Promise<void> }
   usuarios: Map<string, string>
@@ -116,8 +118,16 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
   // --- bots ---------------------------------------------------------------------------
 
   const hoje = () => new Date(agora() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const editor = (rep: FastifyReply, req: FastifyRequest, o: Omit<Parameters<typeof paginaEditorBot>[0], 'padrao' | 'usuario'>) =>
-    html(rep, paginaEditorBot({ ...o, padrao: d.bots.padrao, usuario: usuario(req) }))
+  const numerosRecrutamento = () => d.numeros.listar().filter((n) => n.papel === 'recrutamento')
+  const editor = (
+    rep: FastifyReply,
+    req: FastifyRequest,
+    o: Omit<Parameters<typeof paginaEditorBot>[0], 'padrao' | 'usuario' | 'numeros'>
+  ) =>
+    html(
+      rep,
+      paginaEditorBot({ ...o, padrao: d.bots.padrao, usuario: usuario(req), numeros: numerosRecrutamento().map(({ id, nome }) => ({ id, nome })) })
+    )
 
   app.get<{ Querystring: { de?: string } }>('/bots/novo', async (req, rep) => {
     const origem = req.query.de ? d.repo.bot(req.query.de.toUpperCase()) : null
@@ -145,14 +155,14 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
       return rep.code(400).send('Formulário inválido')
     }
     try {
-      const { dados } = prepararBot(entrada, d.bots.padrao, status)
+      const { dados } = prepararBot(entrada, d.bots.padrao, status, numerosRecrutamento().map((n) => n.id))
       if (original && dados.codigo !== original) throw new Error('o código de um bot existente não pode mudar')
       if (original && !d.repo.bot(original)) throw new Error('bot não encontrado')
       if (!original && (d.repo.bot(dados.codigo) || d.repo.contarCandidaturas(dados.codigo) > 0)) {
         throw new Error(`o código ${dados.codigo} já foi usado; escolha outro`)
       }
       d.repo.transacao(() => {
-        d.repo.salvarBot(dados.codigo, JSON.stringify(dados), usuario(req), agora())
+        d.repo.salvarBot(dados.codigo, JSON.stringify(dados), dados.numero_id, usuario(req), agora())
         d.repo.auditar(usuario(req), original ? 'editar_bot' : 'criar_bot', `${dados.codigo} (${status})`, agora())
       })
       d.bots.invalidar()

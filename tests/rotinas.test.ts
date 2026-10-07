@@ -14,7 +14,7 @@ describe('retenção', () => {
   it('apaga dados e arquivos só depois de retencao_meses do encerramento', async () => {
     const repo = new Repositorio(abrirBanco(':memory:'))
     const armazem = new ArmazemArquivos(pastaTemp())
-    const id = repo.criarCandidatura('VEND-OUT26', 'x@s.whatsapp.net', null, null, AGORA)
+    const id = repo.criarCandidatura(1, 'VEND-OUT26', 'x@s.whatsapp.net', null, null, AGORA)
     const arq = await armazem.salvar('VEND-OUT26', 'pdf', 'application/pdf', PDF, AGORA)
     repo.registrarArquivo(id, arq, AGORA)
     const cfg = config([processo({ retencao_meses: 12 })])
@@ -29,7 +29,7 @@ describe('retenção', () => {
 
   it('não toca dados de processo sem YAML', async () => {
     const repo = new Repositorio(abrirBanco(':memory:'))
-    repo.criarCandidatura('ANTIGO', 'x@s.whatsapp.net', null, null, AGORA)
+    repo.criarCandidatura(1, 'ANTIGO', 'x@s.whatsapp.net', null, null, AGORA)
     const r = await aplicarRetencao({ repo, config: config([]), armazem: new ArmazemArquivos(pastaTemp()), log, agora: Date.UTC(2030, 0, 1) })
     expect(r.semConfig).toEqual(['ANTIGO'])
     expect(repo.processosComDados()).toEqual(['ANTIGO'])
@@ -40,7 +40,7 @@ describe('backup', () => {
   it('gera arquivo cifrado que só abre com a senha certa', async () => {
     const dados = pastaTemp()
     const db = abrirBanco(join(dados, 'banco.sqlite'))
-    new Repositorio(db).criarCandidatura('VEND-OUT26', 'x@s.whatsapp.net', null, null, AGORA)
+    new Repositorio(db).criarCandidatura(1, 'VEND-OUT26', 'x@s.whatsapp.net', null, null, AGORA)
     mkdirSync(join(dados, 'curriculos', 'VEND-OUT26'), { recursive: true })
     writeFileSync(join(dados, 'curriculos', 'VEND-OUT26', 'a.pdf'), PDF)
 

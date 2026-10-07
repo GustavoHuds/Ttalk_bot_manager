@@ -22,6 +22,8 @@ export interface DadosBot {
   abre_em: string | null
   encerra_em: string
   retencao_meses: number
+  /** Número de recrutamento que atende o bot. A coluna processos.numero_id é quem vale; aqui vai junto para o editor. */
+  numero_id: number
   perguntas: PerguntaBot[]
   /** Só os textos que diferem do padrão. */
   mensagens: Record<string, string | string[]>
@@ -72,7 +74,7 @@ export function gerarChave(texto: string, usadas: Set<string>): string {
 }
 
 /** Modelo para "Novo bot": as perguntas do planejamento, prontas para ajustar. */
-export function botModelo(hoje: string): DadosBot {
+export function botModelo(hoje: string, numeroId = 1): DadosBot {
   return {
     codigo: '',
     vaga: '',
@@ -80,6 +82,7 @@ export function botModelo(hoje: string): DadosBot {
     abre_em: hoje,
     encerra_em: hoje,
     retencao_meses: 12,
+    numero_id: numeroId,
     perguntas: [
       { chave: 'nome', tipo: 'texto', texto: 'Para começar, qual é o seu nome completo?', validacao: 'nome_completo' },
       { chave: 'cidade', tipo: 'texto', texto: 'Em qual cidade e bairro você mora?' },
@@ -115,6 +118,7 @@ export function paraEditor(bruto: unknown, padrao: Mensagens): DadosBot {
     abre_em: dataTexto(d.abre_em),
     encerra_em: dataTexto(d.encerra_em) ?? '',
     retencao_meses: Number(d.retencao_meses ?? 12),
+    numero_id: Number(d.numero_id ?? 1),
     perguntas,
     mensagens
   }
@@ -124,9 +128,16 @@ export function paraEditor(bruto: unknown, padrao: Mensagens): DadosBot {
  * Normaliza o que veio do formulário e valida com as mesmas regras do motor.
  * Regras do painel: o currículo é sempre a última pergunta, e só existe um.
  */
-export function prepararBot(entrada: unknown, padrao: Mensagens, status: StatusProcesso): { dados: DadosBot; processo: Processo } {
+export function prepararBot(
+  entrada: unknown,
+  padrao: Mensagens,
+  status: StatusProcesso,
+  numerosRecrutamento: number[]
+): { dados: DadosBot; processo: Processo } {
   if (!entrada || typeof entrada !== 'object') throw new ErroConfig('formulário vazio')
   const e = entrada as Record<string, unknown>
+  const numeroId = Number(e.numero_id)
+  if (!numerosRecrutamento.includes(numeroId)) throw new ErroConfig('escolha um número de recrutamento para o bot')
   const brutas = Array.isArray(e.perguntas) ? (e.perguntas as Record<string, unknown>[]) : []
   const usadas = new Set(brutas.map((p) => String(p.chave ?? '')).filter(Boolean))
 
@@ -176,6 +187,7 @@ export function prepararBot(entrada: unknown, padrao: Mensagens, status: StatusP
     abre_em: dataTexto(e.abre_em),
     encerra_em: dataTexto(e.encerra_em) ?? '',
     retencao_meses: Number(e.retencao_meses),
+    numero_id: numeroId,
     perguntas,
     mensagens
   }
@@ -195,7 +207,7 @@ export class FonteBots {
   get(): ConfigCarregada {
     this.cache ??= montarConfig(
       this.padrao,
-      this.repo.listarBots().map((b) => ({ origem: `bot ${b.codigo}`, dados: JSON.parse(b.dados) as unknown })),
+      this.repo.listarBots().map((b) => ({ origem: `bot ${b.codigo}`, dados: { ...(JSON.parse(b.dados) as object), numero_id: b.numeroId } })),
       Date.now(),
       this.empresa
     )
@@ -214,7 +226,7 @@ export class FonteBots {
       try {
         const p = validarProcesso(dados, this.padrao, arquivo)
         const ed = paraEditor(dados, this.padrao)
-        this.repo.salvarBot(p.codigo, JSON.stringify({ ...ed, codigo: p.codigo }), 'importacao', agora)
+        this.repo.salvarBot(p.codigo, JSON.stringify({ ...ed, codigo: p.codigo, numero_id: 1 }), 1, 'importacao', agora)
         r.importados.push(p.codigo)
       } catch (e) {
         r.erros.push(`${arquivo}: ${(e as Error).message}`)

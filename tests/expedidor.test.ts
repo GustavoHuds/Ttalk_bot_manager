@@ -18,6 +18,7 @@ function montar(opcoes: { falhar?: boolean; limitePorMinuto?: number } = {}) {
     enviarEnquete: async (jid, _c, pergunta) => void eventos.push({ em: t, tipo: 'enquete', jid, texto: pergunta })
   }
   const exp = new Expedidor({
+    numeroId: 1,
     repo,
     conexao,
     log,
@@ -26,8 +27,8 @@ function montar(opcoes: { falhar?: boolean; limitePorMinuto?: number } = {}) {
     esperar: async (ms) => void (t += ms),
     ...(opcoes.limitePorMinuto ? { limitePorMinuto: opcoes.limitePorMinuto } : {})
   })
-  const receber = (jid: string, em = t) => repo.registrarRecebida(`in-${jid}-${em}`, jid, em, '{}')
-  const fila = (jid: string, texto: string) => repo.enfileirarSaida(jid, JSON.stringify({ tipo: 'texto', texto }), t)
+  const receber = (jid: string, em = t) => repo.registrarRecebida(1, `in-${jid}-${em}`, jid, em, '{}')
+  const fila = (jid: string, texto: string) => repo.enfileirarSaida(1, jid, JSON.stringify({ tipo: 'texto', texto }), t)
   return { repo, exp, eventos, receber, fila, tempo: () => t, avancar: (ms: number) => void (t += ms) }
 }
 
@@ -78,6 +79,15 @@ describe('expedidor', () => {
     receber('a@s.whatsapp.net')
     fila('a@s.whatsapp.net', 'oi')
     await exp.acordar()
-    expect(repo.proximaSaida('a@s.whatsapp.net')?.tentativas).toBe(1)
+    expect(repo.proximaSaida(1, 'a@s.whatsapp.net')?.tentativas).toBe(1)
+  })
+
+  it('cada número drena só a própria fila', async () => {
+    const { exp, eventos, repo, tempo } = montar()
+    repo.registrarRecebida(2, 'in-b', 'b@s.whatsapp.net', tempo(), '{}')
+    repo.enfileirarSaida(2, 'b@s.whatsapp.net', JSON.stringify({ tipo: 'texto', texto: 'oi' }), tempo())
+    await exp.acordar()
+    expect(eventos).toEqual([])
+    expect(repo.proximaSaida(2, 'b@s.whatsapp.net')).not.toBeNull()
   })
 })

@@ -33,6 +33,8 @@ export interface EstadoConexao {
 }
 
 export interface OpcoesBaileys {
+  /** Número (tabela numeros) desta conexão. */
+  numeroId: number
   pastaSessao: string
   repo: Repositorio
   log: Logger
@@ -90,7 +92,7 @@ export class ConexaoBaileys implements ConexaoEnvio {
       syncFullHistory: false,
       shouldIgnoreJid: (jid) => jidIgnorado(jid),
       getMessage: async (key) => {
-        const conteudo = key.id ? this.o.repo.enviada(key.id) : null
+        const conteudo = key.id ? this.o.repo.enviada(this.o.numeroId, key.id) : null
         return conteudo ? (JSON.parse(conteudo, BufferJSON.reviver) as proto.IMessage) : undefined
       }
     })
@@ -169,6 +171,7 @@ export class ConexaoBaileys implements ConexaoEnvio {
     }
 
     const m: MensagemRecebida = {
+      numeroId: this.o.numeroId,
       id: msg.key.id,
       jid: quem.jid,
       telefone: quem.telefone,
@@ -188,7 +191,7 @@ export class ConexaoBaileys implements ConexaoEnvio {
     const pu = normalizeMessageContent(msg.message)?.pollUpdateMessage
     const idEnquete = pu?.pollCreationMessageKey?.id
     if (!pu?.vote || !idEnquete) return null
-    const enquete = this.o.repo.enquete(idEnquete)
+    const enquete = this.o.repo.enquete(this.o.numeroId, idEnquete)
     if (!enquete) return null
 
     const eu = [this.sock?.user?.id, this.sock?.user?.lid].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j))
@@ -234,12 +237,12 @@ export class ConexaoBaileys implements ConexaoEnvio {
     const enviada = await this.exigirSocket().sendMessage(jid, { poll: { name: pergunta, values: opcoes, selectableCount: 1 } })
     this.guardarEnviada(enviada)
     const segredo = enviada?.message?.messageContextInfo?.messageSecret
-    if (enviada?.key.id && segredo) this.o.repo.salvarEnquete(enviada.key.id, jid, chave, opcoes, segredo, Date.now())
+    if (enviada?.key.id && segredo) this.o.repo.salvarEnquete(this.o.numeroId, enviada.key.id, jid, chave, opcoes, segredo, Date.now())
     else this.o.log.warn('enquete enviada sem segredo; só respostas digitadas serão aceitas')
   }
 
   private guardarEnviada(m: WAMessage | undefined): void {
-    if (m?.key.id && m.message) this.o.repo.salvarEnviada(m.key.id, JSON.stringify(m.message, BufferJSON.replacer), Date.now())
+    if (m?.key.id && m.message) this.o.repo.salvarEnviada(this.o.numeroId, m.key.id, JSON.stringify(m.message, BufferJSON.replacer), Date.now())
   }
 
   async baixarMidia(bruto: string): Promise<Buffer> {

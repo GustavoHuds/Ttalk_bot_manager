@@ -105,12 +105,14 @@ export function validarProcesso(bruto: unknown, padrao: Mensagens, arquivoOrigem
   if (typeof retencaoMeses !== 'number' || !Number.isInteger(retencaoMeses) || retencaoMeses < 1 || retencaoMeses > 60) {
     throw new ErroConfig('retencao_meses deve ser um número inteiro entre 1 e 60')
   }
+  const numeroId = d.numero_id ?? 1
+  if (typeof numeroId !== 'number' || !Number.isInteger(numeroId) || numeroId < 1) throw new ErroConfig('numero_id deve ser o id de um número')
   const mensagens = { ...padrao, ...validarMensagens(d.mensagens, 'processo') }
   if (!Array.isArray(d.perguntas) || d.perguntas.length === 0) throw new ErroConfig('o processo precisa de pelo menos uma pergunta')
   const perguntas = d.perguntas.map((p, i) => validarPergunta(p, i, mensagens))
   const chaves = perguntas.map((p) => p.chave)
   if (new Set(chaves).size !== chaves.length) throw new ErroConfig('há perguntas com a mesma chave')
-  return { codigo, vaga, status, abreEm, encerraEm, retencaoMeses, perguntas, mensagens, arquivoOrigem }
+  return { codigo, vaga, status, abreEm, encerraEm, retencaoMeses, numeroId, perguntas, mensagens, arquivoOrigem }
 }
 
 /** Textos padrão de fábrica (config/mensagens-padrao.yaml). Cada bot sobrescreve o que quiser pelo painel. */
