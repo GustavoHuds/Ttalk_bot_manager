@@ -10,23 +10,31 @@ import { abrirBanco } from './db/banco.js'
 import { RepoGrupos } from './db/grupos.js'
 import { RepoNumeros } from './db/numeros.js'
 import { Repositorio } from './db/repositorio.js'
+import { ExpedidorGrupos } from './grupos/expedidor.js'
+import { OrquestradorGrupos } from './grupos/orquestrador.js'
 import { criarPainel } from './painel/servidor.js'
 import { Alertas, VigiaConexao } from './rotinas/alerta.js'
 import { apagarBackupsAntigos, fazerBackup } from './rotinas/backup.js'
 import { aplicarRetencao } from './rotinas/retencao.js'
 import { ConexaoBaileys } from './whatsapp/baileys.js'
 import { Expedidor } from './whatsapp/expedidor.js'
-import { moverSessaoAntiga, pastaSessaoNumero } from './whatsapp/gerenciador.js'
+import { GerenciadorConexoes, moverSessaoAntiga, pastaSessaoNumero } from './whatsapp/gerenciador.js'
 
 const amb = lerAmbiente()
-// Logs nunca levam conteúdo de mensagem nem dados de candidato: só IDs.
+// Logs nunca levam conteúdo de mensagem nem dados de candidato ou funcionário: só IDs.
 const log = pino({ level: amb.logNivel, base: undefined })
+// Uma promessa esquecida não pode derrubar o bot em silêncio: registra e segue.
+// Exceção síncrona não tratada (uncaughtException) continua derrubando o processo.
+process.on('unhandledRejection', (err) => log.error({ err }, 'promessa rejeitada sem tratamento'))
 
 await mkdir(amb.dados, { recursive: true, mode: 0o700 })
 const db = abrirBanco(join(amb.dados, 'banco.sqlite'))
 const repo = new Repositorio(db)
-if (await moverSessaoAntiga(amb.dados)) log.info('sessão do WhatsApp movida para sessoes/1')
+const numeros = new RepoNumeros(db)
+const grupos = new RepoGrupos(db)
 const armazem = new ArmazemArquivos(amb.dados)
+// Só depois da migração do banco: a sessão de antes vira a do número 1.
+if (await moverSessaoAntiga(amb.dados)) log.info('sessão do WhatsApp movida para sessoes/1')
 
 // Bots ficam no banco e são editados pelo painel. Os YAML antigos só entram na primeira subida.
 const config = new FonteBots(repo, lerPadrao(amb.config), amb.empresa)
@@ -35,42 +43,69 @@ if (importacao.importados.length) log.info({ bots: importacao.importados }, 'bot
 for (const e of [...importacao.erros, ...config.get().erros]) log.error(`bot com erro: ${e}`)
 
 const alertas = new Alertas({ smtpUrl: amb.smtpUrl, de: amb.alertaDe, para: amb.alertaPara }, log)
-const vigia = new VigiaConexao(alertas)
+const vigias = new Map<number, VigiaConexao>()
 
-let expedidor: Expedidor | null = null
-const conexao: ConexaoBaileys = new ConexaoBaileys({
-  numeroId: 1,
-  papel: 'recrutamento',
-  pastaSessao: pastaSessaoNumero(amb.dados, 1),
-  repo,
-  log,
-  janelaMs: amb.janelaMs,
-  aoReceber: (m) => orquestrador.receber(m),
-  aoMudarEstado: (e) => {
-    vigia.verificar(e)
-    if (e.status === 'conectado') void expedidor?.acordar()
-  }
-})
+function conexaoAtiva(numeroId: number): ConexaoBaileys {
+  const c = gerenciador.conexao(numeroId)
+  if (!c) throw new Error(`número ${numeroId} desativado`)
+  return c
+}
 
 const orquestrador = new Orquestrador({
   repo,
   config: () => config.get(),
-  baixarMidia: (_numeroId, bruto) => conexao.baixarMidia(bruto),
+  baixarMidia: (numeroId, bruto) => conexaoAtiva(numeroId).baixarMidia(bruto),
   armazem,
   log,
-  aoEnfileirar: () => void expedidor?.acordar()
+  aoEnfileirar: (numeroId) => gerenciador.acordar(numeroId)
 })
 
-expedidor = new Expedidor({ numeroId: 1, repo, conexao, log, janelaMs: amb.janelaMs })
+const orquestradorGrupos = new OrquestradorGrupos({
+  repo,
+  grupos,
+  conexao: (numeroId) => gerenciador.conexao(numeroId),
+  log,
+  conectadoDesde: (numeroId) => {
+    const e = gerenciador.estado(numeroId)
+    return e?.status === 'conectado' ? e.desde : null
+  },
+  aoEnfileirar: (numeroId) => gerenciador.acordar(numeroId)
+})
+
+const gerenciador: GerenciadorConexoes<ConexaoBaileys> = new GerenciadorConexoes((n) => {
+  const vigia = new VigiaConexao(alertas, Date.now, n.nome)
+  vigias.set(n.id, vigia)
+  const conexao = new ConexaoBaileys({
+    numeroId: n.id,
+    papel: n.papel,
+    pastaSessao: pastaSessaoNumero(amb.dados, n.id),
+    repo,
+    log: log.child({ numero: n.id }),
+    janelaMs: amb.janelaMs,
+    aoReceber: (m) => orquestrador.receber(m),
+    aoComando: (m) => orquestradorGrupos.receber(m),
+    aoEventoGrupos: (e) => orquestradorGrupos.eventoGrupos(n.id, e),
+    aoMudarEstado: (e) => {
+      vigia.verificar(e)
+      if (e.status === 'conectado') gerenciador.acordar(n.id)
+    }
+  })
+  const expedidor =
+    n.papel === 'grupos'
+      ? new ExpedidorGrupos({ numeroId: n.id, grupos, conexao, log })
+      : new Expedidor({ numeroId: n.id, repo, conexao, log, janelaMs: amb.janelaMs })
+  return { conexao, expedidor }
+}, log)
 
 orquestrador.retomarPendentes()
-await conexao.iniciar()
-expedidor.iniciar()
+await gerenciador.iniciarTodos(numeros.listar())
 
 const timers: NodeJS.Timeout[] = [
   setInterval(() => orquestrador.verificarFinalizacoes(), 5_000),
   setInterval(() => orquestrador.retomarPendentes(), 60_000),
-  setInterval(() => vigia.verificar(conexao.estadoAtual), 60_000),
+  setInterval(() => {
+    for (const [id, estado] of gerenciador.estados()) vigias.get(id)?.verificar(estado)
+  }, 60_000),
   setInterval(() => void rotinaDiaria(), 10 * 60_000)
 ]
 
@@ -100,16 +135,18 @@ async function rotinaDiaria(): Promise<void> {
 
 const painel = await criarPainel({
   repo,
+  numeros,
+  grupos,
   bots: config,
-  numeros: new RepoNumeros(db),
-  grupos: new RepoGrupos(db),
   armazem,
-  // Ainda um número só até a Tarefa 14 ligar o GerenciadorConexoes de fato.
   conexoes: {
-    estado: (id) => (id === 1 ? conexao.estadoAtual : null),
-    novaSessao: () => conexao.novaSessao(),
-    ativar: async () => {},
-    desativar: async () => {}
+    estado: (id) => gerenciador.estado(id),
+    novaSessao: (id) => gerenciador.novaSessao(id),
+    ativar: (n) => gerenciador.adicionar(n),
+    desativar: async (id) => {
+      await gerenciador.parar(id)
+      vigias.delete(id)
+    }
   },
   usuarios: amb.painelUsuarios,
   segredo: amb.painelSegredo,
@@ -126,10 +163,10 @@ async function desligar(sinal: string): Promise<void> {
   desligando = true
   log.info({ sinal }, 'desligando')
   for (const t of timers) clearInterval(t)
-  expedidor?.parar()
   await painel.close()
   await orquestrador.ocioso()
-  await conexao.parar()
+  await orquestradorGrupos.ocioso()
+  await gerenciador.pararTodos()
   db.close()
   process.exit(0)
 }
