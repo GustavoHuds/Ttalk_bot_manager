@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { semAcento } from '../conversa/textos.js'
 import type { DadosFuncionario } from '../db/grupos.js'
 import { ErroEquipe, lerCsvEquipe, validarFuncionario, type LinhaCsv } from '../grupos/equipe.js'
+import { formatarTelefone } from '../grupos/pessoas.js'
 import { gerarCsvEquipe } from './exportar.js'
 import { paginaEquipe, paginaFuncionario, paginaGrupos, paginaImportar, type FormFuncionario, type LinhaPrevia } from './paginas-equipe.js'
 import type { Ajudantes } from './rotas-numeros.js'
@@ -90,7 +91,9 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
     const form: FormFuncionario = {
       id: f.id,
       nome: f.nome,
-      telefone: f.telefone ?? '',
+      // Formatado ("+55 83 …" ou "+<DDI>…"): a chave crua de um estrangeiro, sem o "+", voltaria como
+      // brasileira ao salvar (telefoneDigitado) e ganharia um 55 inventado.
+      telefone: f.telefone ? formatarTelefone(f.telefone) : '',
       setor: f.setor ?? '',
       loja: f.loja ?? '',
       cargo: f.cargo ?? '',
@@ -154,7 +157,8 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
     if (!f) return rep.code(404).send('Pessoa não encontrada')
     d.repo.transacao(() => {
       g.excluirFuncionario(f.id)
-      // Só o id: a pessoa foi excluída do cadastro, o nome não fica preso para sempre na auditoria.
+      // Só o id neste registro: o nome não é repetido na exclusão. Registros anteriores da mesma pessoa
+      // (criar, editar, gestor) continuam com o nome: a auditoria não é apagada nem reescrita.
       d.repo.auditar(a.usuario(req), 'excluir_funcionario', `#${f.id}`, a.agora())
     })
     return rep.redirect('/equipe?excluido=1', 303)

@@ -194,6 +194,23 @@ describe('painel: equipe (telefone, CSV e auditoria)', () => {
     expect(r.body).toContain('&lt;script&gt;')
   })
 
+  it('editar e salvar sem mexer mantém a chave do telefone, brasileiro ou estrangeiro', async () => {
+    const { app, grupos, cookie } = await painelDeEquipe()
+    for (const telefone of ['4512345678', '14155550123', '5583999990001']) {
+      const id = grupos.salvarFuncionario(
+        null,
+        { nome: 'Ana Souza', telefone, lid: null, setor: null, loja: null, cargo: null, nascimento: null, ativo: true },
+        AGORA
+      )
+      const pagina = await app.inject({ url: `/equipe/${id}`, headers: { cookie } })
+      const preenchido = /<input name="telefone" value="([^"]*)"/.exec(pagina.body)![1]!
+      const r = await post(app, cookie, '/equipe/salvar', { id: String(id), nome: 'Ana Souza', telefone: preenchido, ativo: '1' })
+      expect(r.statusCode).toBe(303)
+      expect(grupos.funcionario(id)!.telefone).toBe(telefone)
+      grupos.excluirFuncionario(id)
+    }
+  })
+
   it('excluir um gestor remove também o vínculo de gestor (cascata)', async () => {
     const { app, grupos, cookie } = await painelDeEquipe()
     const id = grupos.salvarFuncionario(

@@ -3,7 +3,7 @@ import type { DadosFuncionario, Funcionario, Grupo } from '../db/grupos.js'
 /** Alguém no WhatsApp: o JID visto, o telefone (quando se sabe) e o LID (quando existe). */
 export interface Pessoa {
   jid: string
-  /** 55 + DDD + número, canônico. */
+  /** Chave do telefone: brasileiro canônico (55+DDD+número com o 9) ou dígitos com DDI para outros países. */
   telefone: string | null
   /** JID @lid sem dispositivo. */
   lid: string | null

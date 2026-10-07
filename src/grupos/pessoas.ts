@@ -31,8 +31,9 @@ export function telefoneCanonico(texto: string | null | undefined): string | nul
  * dígitos exatamente como vieram (8 a 15). Nunca usar o tamanho para adivinhar o país: um número
  * estrangeiro de 10 ou 11 dígitos (ex.: Dinamarca +45 12345678 → "4512345678") não é um DDD brasileiro
  * só porque bate no mesmo tamanho — essa confusão já causou gente cadastrada com o 55 inventado.
+ * Não confundir com telefoneDoJid (whatsapp/normalizar.ts): dígitos crus, sem chave, usado pelo recrutamento.
  */
-export function telefoneDeJid(v: string | null | undefined): string | null {
+export function chaveTelefoneDeJid(v: string | null | undefined): string | null {
   if (!v) return null
   const dig = v.split('@')[0]!.split(':')[0]!.replace(/\D/g, '')
   if (/^55\d{10,11}$/.test(dig)) return telefoneCanonico(dig)
@@ -43,7 +44,7 @@ export function telefoneDeJid(v: string | null | undefined): string | null {
 /**
  * Telefone digitado por uma pessoa (painel, planilha CSV, /cadastrar no privado): sem "+" assume o
  * Brasil e exige DDD válido (telefoneCanonico); com "+" e não "+55" é estrangeiro — fica com os dígitos
- * como vieram (8 a 15), a mesma forma que telefoneDeJid produziria para esse mesmo número vindo do
+ * como vieram (8 a 15), a mesma forma que chaveTelefoneDeJid produziria para esse mesmo número vindo do
  * WhatsApp, para os dois lados sempre baterem. Um apóstrofo na frente (neutralização de fórmula do
  * Excel, ao reimportar um CSV exportado por aqui) é ignorado.
  */
@@ -73,14 +74,14 @@ export function pessoaDoJid(jid: string): Pessoa {
   const usuario = usuarioDoJid(jid)
   return {
     jid,
-    telefone: jid.endsWith('@s.whatsapp.net') ? telefoneDeJid(usuario) : null,
+    telefone: jid.endsWith('@s.whatsapp.net') ? chaveTelefoneDeJid(usuario) : null,
     lid: jid.endsWith('@lid') ? `${usuario}@lid` : null
   }
 }
 
 /**
  * Acha no cadastro: pelo telefone, senão pelo LID. Pessoa.telefone já chega como chave
- * (telefoneDeJid para quem veio do WhatsApp, telefoneDigitado para quem foi digitado): compara direto,
+ * (chaveTelefoneDeJid para quem veio do WhatsApp, telefoneDigitado para quem foi digitado): compara direto,
  * sem reprocessar — reprocessar um valor que já é a chave é o que inventava o 55 em número estrangeiro.
  */
 export function acharFuncionario(funcionarios: Funcionario[], p: Pessoa): Funcionario | null {

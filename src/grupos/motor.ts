@@ -248,7 +248,12 @@ class Execucao {
   private desconhecidos(): AcaoGrupo[] {
     const fora = (this.ctx.membros ?? []).filter((m) => !this.achar(m))
     if (fora.length === 0) return responder('✅ Todos os participantes deste grupo estão cadastrados.')
-    const linhas = fora.map((m) => `• ${m.telefone ? formatarTelefone(m.telefone) : `contato oculto (${usuarioDoJid(m.jid)})`}`)
+    // LGPD: quem participa pelo LID tem o número escondido pelo WhatsApp para o grupo; mesmo que o bot
+    // o conheça (lidMapping), não o expõe aqui. Só mostra telefone de quem já aparece com ele no grupo.
+    const linhas = fora.map((m) => {
+      const visivel = m.jid.endsWith('@s.whatsapp.net') && m.telefone
+      return `• ${visivel ? formatarTelefone(m.telefone!) : `contato oculto (${usuarioDoJid(m.jid)})`}`
+    })
     return responder(
       `❓ ${fora.length} sem cadastro:\n${listar(linhas)}\n\nCadastre com /cadastrar @pessoa Nome | Setor | Loja`
     )

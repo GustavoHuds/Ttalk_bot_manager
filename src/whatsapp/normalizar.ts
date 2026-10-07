@@ -29,6 +29,7 @@ export function jidIgnorado(jid: string | null | undefined): boolean {
   return !jid || !!isJidGroup(jid) || !!isJidBroadcast(jid) || !!isJidStatusBroadcast(jid) || !!isJidNewsletter(jid)
 }
 
+/** Dígitos crus do JID @s.whatsapp.net (recrutamento); a chave do bot de grupos é chaveTelefoneDeJid (grupos/pessoas.ts). */
 export function telefoneDoJid(jid: string | null | undefined): string | null {
   if (!jid || !isPnUser(jid)) return null
   const user = jidDecode(jid)?.user

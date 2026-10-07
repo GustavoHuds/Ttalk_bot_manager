@@ -137,6 +137,15 @@ describe('motor do bot de grupos: comandos', () => {
     expect(textos(rodar(ctx({ membros: [membro(ANA_LID)] }), '/desconhecidos'))[0]).toContain('Todos os participantes')
   })
 
+  it('/desconhecidos nunca mostra o telefone de quem participa pelo LID (WhatsApp esconde o número)', () => {
+    const lidComTelefone: Pessoa = { jid: '888@lid', telefone: '5583999990088', lid: '888@lid' }
+    const t = textos(rodar(ctx({ membros: [membro(lidComTelefone), membro(AMERICANO)] }), '/desconhecidos'))[0]!
+    expect(t).toContain('contato oculto (888)')
+    expect(t).not.toContain('99999-0088')
+    expect(t).not.toContain('5583999990088')
+    expect(t).toContain('+14155550100')
+  })
+
   it('/setores conta por setor e loja', () => {
     const extra: Funcionario = { ...BETO, id: 3, nome: 'Caio', telefone: '5583999990003', loja: 'Centro' }
     const t = textos(rodar(ctx({ funcionarios: [ANA, BETO, extra] }), '/setores'))[0]!

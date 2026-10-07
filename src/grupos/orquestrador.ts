@@ -3,7 +3,7 @@ import type { RepoGrupos } from '../db/grupos.js'
 import type { Repositorio } from '../db/repositorio.js'
 import { acharComando, interpretar, type Comando } from './comandos.js'
 import { processarComando } from './motor.js'
-import { pessoaDoJid, telefoneDeJid, usuarioDoJid, vinculosDeLid } from './pessoas.js'
+import { pessoaDoJid, chaveTelefoneDeJid, usuarioDoJid, vinculosDeLid } from './pessoas.js'
 import type { AcaoGrupo, ConexaoGrupos, ContextoGrupos, EnvioGrupo, EventoGrupos, MembroGrupo, MensagemGrupo, Pessoa } from './tipos.js'
 
 export interface DependenciasGrupos {
@@ -187,10 +187,10 @@ export class OrquestradorGrupos {
 
   /** Descobre o telefone por trás do LID quando o WhatsApp sabe (de qualquer país, sem assumir Brasil). */
   private async completar(conexao: ConexaoGrupos | null, p: Pessoa): Promise<Pessoa> {
-    const telefone = telefoneDeJid(p.telefone)
+    const telefone = chaveTelefoneDeJid(p.telefone)
     if (telefone || !p.lid || !conexao) return { ...p, telefone }
     try {
-      return { ...p, telefone: telefoneDeJid(await conexao.telefoneDoLid(p.lid)) }
+      return { ...p, telefone: chaveTelefoneDeJid(await conexao.telefoneDoLid(p.lid)) }
     } catch {
       return { ...p, telefone: null }
     }

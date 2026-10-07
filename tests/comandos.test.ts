@@ -6,7 +6,7 @@ import {
   formatarTelefone,
   pessoaDoJid,
   telefoneCanonico,
-  telefoneDeJid,
+  chaveTelefoneDeJid,
   telefoneDigitado,
   usuarioDoJid,
   vinculosDeLid
@@ -117,20 +117,20 @@ describe('pessoas', () => {
     expect(pessoaDoJid('14155550123@s.whatsapp.net').telefone).toBe('14155550123')
     // Número de 12 dígitos que não é brasileiro (código 52, México): fica com os dígitos como vieram.
     expect(pessoaDoJid('521771234567@s.whatsapp.net').telefone).toBe('521771234567')
-    expect(telefoneDeJid('521771234567')).toBe('521771234567')
+    expect(chaveTelefoneDeJid('521771234567')).toBe('521771234567')
   })
 
-  it('telefoneDeJid nunca usa o tamanho para adivinhar o país (só o prefixo "55" decide)', () => {
+  it('chaveTelefoneDeJid nunca usa o tamanho para adivinhar o país (só o prefixo "55" decide)', () => {
     // Dinamarca (+45), 10 dígitos com o código do país: do mesmo tamanho de um DDD+8 brasileiro,
     // mas sem o "55" não é um número daqui — o bug antigo (decidir pelo tamanho) inventava o 55.
-    expect(telefoneDeJid('4512345678')).toBe('4512345678')
+    expect(chaveTelefoneDeJid('4512345678')).toBe('4512345678')
     // Celular dos EUA, 11 dígitos: também não começa com "55".
-    expect(telefoneDeJid('14155550123')).toBe('14155550123')
+    expect(chaveTelefoneDeJid('14155550123')).toBe('14155550123')
     // Brasileiro de verdade: começa com "55" e tem 10 ou 11 dígitos depois.
-    expect(telefoneDeJid('5583999990001')).toBe('5583999990001')
-    expect(telefoneDeJid('558399990001')).toBe('5583999990001')
-    expect(telefoneDeJid(null)).toBeNull()
-    expect(telefoneDeJid('123')).toBeNull()
+    expect(chaveTelefoneDeJid('5583999990001')).toBe('5583999990001')
+    expect(chaveTelefoneDeJid('558399990001')).toBe('5583999990001')
+    expect(chaveTelefoneDeJid(null)).toBeNull()
+    expect(chaveTelefoneDeJid('123')).toBeNull()
   })
 
   it('telefoneDigitado: sem "+" assume o Brasil; com "+" e não "+55" mantém os dígitos (estrangeiro)', () => {
@@ -148,7 +148,7 @@ describe('pessoas', () => {
     expect(telefoneDigitado("'+4512345678")).toBe('4512345678')
   })
 
-  it('a mesma regra dos dois lados: o que telefoneDigitado grava bate com o que telefoneDeJid lê de volta do WhatsApp', () => {
+  it('a mesma regra dos dois lados: o que telefoneDigitado grava bate com o que chaveTelefoneDeJid lê de volta do WhatsApp', () => {
     for (const digitado of ['+45 12345678', '+65 8123 4567', '+7 999 123 4567']) {
       const salvo = telefoneDigitado(digitado)!
       const doWhatsapp = pessoaDoJid(`${salvo}@s.whatsapp.net`).telefone

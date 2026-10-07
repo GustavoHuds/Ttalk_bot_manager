@@ -14,7 +14,7 @@ export interface Grupo {
 
 export interface DadosFuncionario {
   nome: string
-  /** 55 + DDD + número, sempre na forma de telefoneCanonico. */
+  /** Chave do telefone: brasileiro canônico (55+DDD+número com o 9) ou dígitos com DDI para outros países. */
   telefone: string | null
   /** JID @lid, quando o WhatsApp esconde o número. Só o WhatsApp o informa. */
   lid: string | null
