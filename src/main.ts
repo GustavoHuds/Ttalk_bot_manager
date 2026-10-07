@@ -139,6 +139,7 @@ const painel = await criarPainel({
   grupos,
   bots: config,
   armazem,
+  log,
   conexoes: {
     estado: (id) => gerenciador.estado(id),
     novaSessao: (id) => gerenciador.novaSessao(id),

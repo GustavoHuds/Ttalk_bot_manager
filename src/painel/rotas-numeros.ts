@@ -34,7 +34,7 @@ export function rotasNumeros(app: FastifyInstance, d: DependenciasPainel, a: Aju
     try {
       await d.conexoes.ativar(n)
     } catch (err) {
-      req.log.error({ err, numero: n.id }, 'falha ao ativar número novo')
+      d.log.error({ err, numero: n.id }, 'falha ao ativar número novo')
       return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
     }
     return rep.redirect(`/numeros/${n.id}`, 303)
@@ -56,7 +56,7 @@ export function rotasNumeros(app: FastifyInstance, d: DependenciasPainel, a: Aju
     try {
       await d.conexoes.novaSessao(n.id)
     } catch (err) {
-      req.log.error({ err, numero: n.id }, 'falha ao gerar nova sessão')
+      d.log.error({ err, numero: n.id }, 'falha ao gerar nova sessão')
       d.repo.auditar(a.usuario(req), 'nova_sessao_falhou', `${n.id} ${n.nome}`, a.agora())
       return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
     }
@@ -76,7 +76,7 @@ export function rotasNumeros(app: FastifyInstance, d: DependenciasPainel, a: Aju
       await d.conexoes.ativar({ ...n, ativo: true })
     } catch (err) {
       // O banco já marcou o número como ativo; não desfazemos isso, só avisamos.
-      req.log.error({ err, numero: n.id }, 'falha ao ativar número')
+      d.log.error({ err, numero: n.id }, 'falha ao ativar número')
       return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
     }
     return rep.redirect(`/numeros/${n.id}`, 303)
@@ -94,7 +94,7 @@ export function rotasNumeros(app: FastifyInstance, d: DependenciasPainel, a: Aju
       await d.conexoes.desativar(n.id)
     } catch (err) {
       // O banco já marcou o número como desativado; não desfazemos isso, só avisamos.
-      req.log.error({ err, numero: n.id }, 'falha ao desativar número')
+      d.log.error({ err, numero: n.id }, 'falha ao desativar número')
       return rep.redirect(`/numeros/${n.id}?erro=1`, 303)
     }
     return rep.redirect(`/numeros/${n.id}`, 303)

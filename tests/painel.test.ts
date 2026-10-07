@@ -12,7 +12,7 @@ import { celula, gerarCsv } from '../src/painel/exportar.js'
 import { linkWaMe } from '../src/painel/paginas.js'
 import { criarPainel } from '../src/painel/servidor.js'
 import type { EstadoConexao } from '../src/whatsapp/baileys.js'
-import { AGORA, PDF, padrao, pastaTemp, processo } from './ajuda.js'
+import { AGORA, PDF, log, padrao, pastaTemp, processo } from './ajuda.js'
 
 const form = { 'content-type': 'application/x-www-form-urlencoded' }
 
@@ -50,6 +50,7 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos, conexoe
     bots,
     relogio: () => AGORA,
     armazem,
+    log,
     conexoes,
     usuarios: new Map([['rh', hashSenha('senha-bem-longa')]]),
     segredo: 'x'.repeat(40),

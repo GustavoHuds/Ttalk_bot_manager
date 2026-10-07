@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import cookie from '@fastify/cookie'
 import formbody from '@fastify/formbody'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
+import type { Logger } from 'pino'
 import type { ArmazemArquivos } from '../arquivos.js'
 import { botModelo, paraEditor, prepararBot, type FonteBots } from '../config/bots.js'
 import type { StatusProcesso } from '../config/tipos.js'
@@ -31,6 +32,7 @@ export interface DependenciasPainel {
   grupos: RepoGrupos
   armazem: ArmazemArquivos
   conexoes: ControleConexoes
+  log: Logger
   usuarios: Map<string, string>
   segredo: string
   cookieSeguro: boolean
