@@ -456,7 +456,7 @@ export class Repositorio {
 
   filas(): { entrada: number; saida: number; erros: number } {
     const e = this.db.prepare(`SELECT COUNT(*) AS n FROM mensagens_processadas WHERE status = 'pendente'`).get() as { n: number }
-    const s = this.db.prepare(`SELECT COUNT(*) AS n FROM saida`).get() as { n: number }
+    const s = this.db.prepare(`SELECT (SELECT COUNT(*) FROM saida) + (SELECT COUNT(*) FROM saida_grupos) AS n`).get() as { n: number }
     const x = this.db.prepare(`SELECT COUNT(*) AS n FROM mensagens_processadas WHERE status = 'erro'`).get() as { n: number }
     return { entrada: e.n, saida: s.n, erros: x.n }
   }

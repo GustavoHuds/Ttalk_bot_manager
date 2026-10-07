@@ -169,6 +169,52 @@ export const MIGRACOES: string[] = [
   DROP TABLE mensagens_processadas;
   ALTER TABLE mensagens_nova RENAME TO mensagens_processadas;
   CREATE INDEX mensagens_pendentes ON mensagens_processadas (status) WHERE status = 'pendente';
+  `,
+  `
+  -- Bot de grupos: grupos de cada número, cadastro da equipe, gestores e caixa de saída própria.
+  CREATE TABLE grupos (
+    numero_id INTEGER NOT NULL REFERENCES numeros (id),
+    jid TEXT NOT NULL,
+    nome TEXT NOT NULL,
+    bot_admin INTEGER NOT NULL DEFAULT 0,
+    setor TEXT,
+    loja TEXT,
+    ativo INTEGER NOT NULL DEFAULT 1,
+    atualizado_em INTEGER NOT NULL,
+    PRIMARY KEY (numero_id, jid)
+  );
+
+  CREATE TABLE funcionarios (
+    id INTEGER PRIMARY KEY,
+    nome TEXT NOT NULL,
+    telefone TEXT UNIQUE,
+    lid TEXT UNIQUE,
+    setor TEXT,
+    loja TEXT,
+    cargo TEXT,
+    nascimento TEXT,
+    ativo INTEGER NOT NULL DEFAULT 1,
+    criado_em INTEGER NOT NULL,
+    atualizado_em INTEGER NOT NULL
+  );
+
+  -- Gestores valem para todos os números de grupos. Ser admin no WhatsApp não dá poder no bot.
+  CREATE TABLE gestores (
+    funcionario_id INTEGER PRIMARY KEY REFERENCES funcionarios (id) ON DELETE CASCADE,
+    adicionado_por TEXT NOT NULL,
+    adicionado_em INTEGER NOT NULL
+  );
+
+  CREATE TABLE saida_grupos (
+    id INTEGER PRIMARY KEY,
+    numero_id INTEGER NOT NULL REFERENCES numeros (id),
+    jid TEXT NOT NULL,
+    conteudo TEXT NOT NULL,
+    criada_em INTEGER NOT NULL,
+    tentativas INTEGER NOT NULL DEFAULT 0,
+    proxima_em INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX saida_grupos_numero ON saida_grupos (numero_id, proxima_em);
   `
 ]
 

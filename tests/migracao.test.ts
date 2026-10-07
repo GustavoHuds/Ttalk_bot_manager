@@ -50,4 +50,11 @@ describe('migrações', () => {
     migrar(db)
     expect(() => db.exec(`INSERT INTO numeros (nome, papel, criado_em) VALUES ('x', 'outro', 1)`)).toThrow()
   })
+
+  it('cria as tabelas do bot de grupos', () => {
+    const db = bancoV2()
+    migrar(db)
+    const tabelas = (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[]).map((t) => t.name)
+    expect(tabelas).toEqual(expect.arrayContaining(['grupos', 'funcionarios', 'gestores', 'saida_grupos']))
+  })
 })
