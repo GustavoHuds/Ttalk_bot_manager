@@ -39,6 +39,7 @@ export class Expedidor {
   private ativos = new Set<string>()
   private ultimoPorJid = new Map<string, number>()
   private timer: NodeJS.Timeout | null = null
+  private parado = false
   private readonly relogio: () => number
   private readonly esperar: (ms: number) => Promise<void>
   private readonly intervalo: number
@@ -52,25 +53,35 @@ export class Expedidor {
   }
 
   iniciar(): void {
-    this.timer = setInterval(() => this.acordar(), 1000)
+    if (this.timer) return
+    this.parado = false
+    this.timer = setInterval(() => void this.acordar(), 1000)
   }
 
   parar(): void {
-    if (this.timer) clearInterval(this.timer)
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+    this.parado = true
   }
 
-  /** Começa a drenar as conversas com mensagens prontas. Devolve quando todas terminarem. */
+  /** Começa a drenar as conversas com mensagens prontas. Nunca rejeita. */
   async acordar(): Promise<void> {
-    if (!this.o.conexao.pronta()) return
-    const novas = this.o.repo.jidsComSaida(this.o.numeroId, this.relogio()).filter((j) => !this.ativos.has(j))
-    await Promise.all(novas.map((jid) => this.drenar(jid)))
+    try {
+      if (this.parado || !this.o.conexao.pronta()) return
+      const novas = this.o.repo.jidsComSaida(this.o.numeroId, this.relogio()).filter((j) => !this.ativos.has(j))
+      await Promise.all(novas.map((jid) => this.drenar(jid)))
+    } catch (err) {
+      this.o.log.error({ err, numero: this.o.numeroId }, 'falha ao acordar o expedidor')
+    }
   }
 
   private async drenar(jid: string): Promise<void> {
     this.ativos.add(jid)
     try {
       for (;;) {
-        if (!this.o.conexao.pronta()) return
+        if (this.parado || !this.o.conexao.pronta()) return
         const item = this.o.repo.proximaSaida(this.o.numeroId, jid)
         if (!item || item.proximaEm > this.relogio()) return
 
@@ -82,9 +93,11 @@ export class Expedidor {
           continue
         }
 
-        const envio = JSON.parse(item.conteudo) as Envio
         await this.limite.reservar()
+        // A espera pela vaga pode ser longa; se a conexão caiu nesse meio-tempo, não envia.
+        if (this.parado || !this.o.conexao.pronta()) return
         try {
+          const envio = JSON.parse(item.conteudo) as Envio
           await this.o.conexao.digitando(jid)
           await this.esperar(duracaoDigitando(envio.tipo === 'texto' ? envio.texto : envio.pergunta))
           const falta = (this.ultimoPorJid.get(jid) ?? 0) + this.intervalo - this.relogio()
@@ -94,6 +107,8 @@ export class Expedidor {
           this.ultimoPorJid.set(jid, this.relogio())
           this.o.repo.removerSaida(item.id)
         } catch (err) {
+          // Caiu durante o próprio envio: não é falha da mensagem, não gasta tentativa.
+          if (!this.o.conexao.pronta()) return
           if (item.tentativas + 1 >= MAX_TENTATIVAS) {
             this.o.log.error({ err, saida: item.id }, 'envio abandonado após várias tentativas')
             this.o.repo.removerSaida(item.id)

@@ -30,6 +30,7 @@ export class ExpedidorGrupos {
   private ativos = new Set<string>()
   private ultimoPorJid = new Map<string, number>()
   private timer: NodeJS.Timeout | null = null
+  private parado = false
   private readonly relogio: () => number
   private readonly esperar: (ms: number) => Promise<void>
   private readonly intervalo: number
@@ -43,29 +44,42 @@ export class ExpedidorGrupos {
   }
 
   iniciar(): void {
+    if (this.timer) return
+    this.parado = false
     this.timer = setInterval(() => void this.acordar(), 1000)
   }
 
   parar(): void {
-    if (this.timer) clearInterval(this.timer)
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+    this.parado = true
   }
 
+  /** Nunca rejeita: uma linha ruim ou qualquer outro erro ao acordar só vai para o log. */
   async acordar(): Promise<void> {
-    if (!this.o.conexao.pronta()) return
-    const novos = this.o.grupos.jidsComSaida(this.o.numeroId, this.relogio()).filter((j) => !this.ativos.has(j))
-    await Promise.all(novos.map((jid) => this.drenar(jid)))
+    try {
+      if (this.parado || !this.o.conexao.pronta()) return
+      const novos = this.o.grupos.jidsComSaida(this.o.numeroId, this.relogio()).filter((j) => !this.ativos.has(j))
+      await Promise.all(novos.map((jid) => this.drenar(jid)))
+    } catch (err) {
+      this.o.log.error({ err, numero: this.o.numeroId }, 'falha ao acordar o expedidor de grupos')
+    }
   }
 
   private async drenar(jid: string): Promise<void> {
     this.ativos.add(jid)
     try {
       for (;;) {
-        if (!this.o.conexao.pronta()) return
+        if (this.parado || !this.o.conexao.pronta()) return
         const item = this.o.grupos.proximaSaida(this.o.numeroId, jid)
         if (!item || item.proximaEm > this.relogio()) return
-        const envio = JSON.parse(item.conteudo) as EnvioGrupo
         await this.limite.reservar()
+        // A espera pela vaga pode ser longa; se a conexão caiu nesse meio-tempo, não envia.
+        if (this.parado || !this.o.conexao.pronta()) return
         try {
+          const envio = JSON.parse(item.conteudo) as EnvioGrupo
           await this.o.conexao.digitando(jid)
           await this.esperar(duracaoDigitandoGrupo(envio.texto))
           const falta = (this.ultimoPorJid.get(jid) ?? 0) + this.intervalo - this.relogio()
@@ -74,6 +88,8 @@ export class ExpedidorGrupos {
           this.ultimoPorJid.set(jid, this.relogio())
           this.o.grupos.removerSaida(item.id)
         } catch (err) {
+          // Caiu durante o próprio envio: não é falha da mensagem, não gasta tentativa.
+          if (!this.o.conexao.pronta()) return
           if (item.tentativas + 1 >= MAX_TENTATIVAS) {
             this.o.log.error({ err, saida: item.id, numero: this.o.numeroId }, 'envio ao grupo abandonado após várias tentativas')
             this.o.grupos.removerSaida(item.id)

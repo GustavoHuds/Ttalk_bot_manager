@@ -88,4 +88,108 @@ describe('expedidor dos grupos', () => {
     expect(duracaoDigitandoGrupo('oi')).toBe(1000)
     expect(duracaoDigitandoGrupo('x'.repeat(500))).toBe(2000)
   })
+
+  it('depois da primeira falha, a próxima tentativa é agendada para t + 5000', async () => {
+    const { exp, grupos, fila, tempo } = montar({ falhar: true })
+    fila('a@g.us', 'oi')
+    await exp.acordar()
+    const t = tempo()
+    expect(grupos.proximaSaida(2, 'a@g.us')).toMatchObject({ tentativas: 1, proximaEm: t + 5000 })
+  })
+
+  it('cabeça atrasada da fila trava os itens seguintes do mesmo jid', async () => {
+    const { exp, grupos, fila, eventos, tempo } = montar()
+    fila('a@g.us', 'um')
+    const item = grupos.proximaSaida(2, 'a@g.us')!
+    grupos.adiarSaida(item.id, tempo() + 10_000)
+    fila('a@g.us', 'dois')
+    await exp.acordar()
+    expect(eventos.filter((e) => e.tipo === 'texto')).toHaveLength(0)
+  })
+
+  it('duas chamadas de acordar() sobrepostas não enviam duas vezes', async () => {
+    const { exp, eventos, fila } = montar()
+    fila('a@g.us', 'oi')
+    await Promise.all([exp.acordar(), exp.acordar()])
+    expect(eventos.filter((e) => e.tipo === 'texto')).toHaveLength(1)
+  })
+
+  it('linha com conteúdo inválido não trava o processo; some depois de 5 tentativas', async () => {
+    const { exp, grupos, tempo } = montar()
+    grupos.enfileirarSaida(2, 'a@g.us', 'não-json', tempo())
+    await expect(exp.acordar()).resolves.toBeUndefined()
+    const item = grupos.proximaSaida(2, 'a@g.us')
+    expect(item).toMatchObject({ tentativas: 1 })
+    for (let i = 0; i < 3; i++) grupos.adiarSaida(item!.id, 0)
+    await exp.acordar()
+    expect(grupos.proximaSaida(2, 'a@g.us')).toBeNull()
+  })
+
+  it('se a conexão cai durante o envio, a tentativa não é contada', async () => {
+    const db = abrirBanco(':memory:')
+    const numeros = new RepoNumeros(db)
+    numeros.criar('Avisos', 'grupos', AGORA)
+    const grupos = new RepoGrupos(db)
+    let t = AGORA
+    let prontaFlag = true
+    const conexao: ConexaoGrupos = {
+      pronta: () => prontaFlag,
+      digitando: async () => {},
+      enviarTexto: async () => {
+        prontaFlag = false
+        throw new Error('caiu')
+      },
+      listarGrupos: async () => [],
+      metadados: async () => {
+        throw new Error('não usado')
+      },
+      telefoneDoLid: async () => null
+    }
+    const exp = new ExpedidorGrupos({ numeroId: 1, grupos, conexao, log, relogio: () => t, esperar: async (ms) => void (t += ms) })
+    grupos.enfileirarSaida(1, 'a@g.us', JSON.stringify({ tipo: 'texto', texto: 'oi' }), t)
+    await exp.acordar()
+    expect(grupos.proximaSaida(1, 'a@g.us')).toMatchObject({ tentativas: 0 })
+  })
+
+  it('se a conexão cai enquanto espera a vaga do limite, não envia nem gasta tentativa', async () => {
+    const db = abrirBanco(':memory:')
+    const numeros = new RepoNumeros(db)
+    numeros.criar('Avisos', 'grupos', AGORA)
+    const grupos = new RepoGrupos(db)
+    let t = AGORA
+    let prontaFlag = true
+    let primeiraEspera = true
+    const eventos: string[] = []
+    const conexao: ConexaoGrupos = {
+      pronta: () => prontaFlag,
+      digitando: async () => void eventos.push('digitando'),
+      enviarTexto: async (jid, texto) => void eventos.push(`texto:${jid}:${texto}`),
+      listarGrupos: async () => [],
+      metadados: async () => {
+        throw new Error('não usado')
+      },
+      telefoneDoLid: async () => null
+    }
+    const exp = new ExpedidorGrupos({
+      numeroId: 1,
+      grupos,
+      conexao,
+      log,
+      limitePorMinuto: 1,
+      relogio: () => t,
+      esperar: async (ms) => {
+        t += ms
+        if (!primeiraEspera) prontaFlag = false
+        primeiraEspera = false
+      }
+    })
+    grupos.enfileirarSaida(1, 'a@g.us', JSON.stringify({ tipo: 'texto', texto: 'um' }), t)
+    await exp.acordar()
+    expect(eventos).toContain('texto:a@g.us:um')
+
+    grupos.enfileirarSaida(1, 'b@g.us', JSON.stringify({ tipo: 'texto', texto: 'dois' }), t)
+    await exp.acordar()
+    expect(eventos.filter((e) => e.startsWith('texto'))).toHaveLength(1)
+    expect(grupos.proximaSaida(1, 'b@g.us')).toMatchObject({ tentativas: 0 })
+  })
 })
