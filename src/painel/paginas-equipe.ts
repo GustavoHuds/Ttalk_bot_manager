@@ -121,7 +121,7 @@ export function paginaImportar(usuario: string, csv: string, previa: LinhaPrevia
   return layout(
     'Importar equipe',
     `<p><a href="/equipe">← Equipe</a></p><h1>Importar equipe (CSV)</h1>${falha(erro)}
-    <div class="cartao"><p>Uma pessoa por linha, separando com ponto e vírgula ou vírgula: <code>nome;telefone;setor;loja;cargo;nascimento</code>. O cabeçalho é opcional; cargo e nascimento podem ficar vazios (e, para quem já está no cadastro, mantêm o valor atual). Quem já está no cadastro (mesmo telefone) é atualizado.</p>
+    <div class="cartao"><p>Uma pessoa por linha, separando com ponto e vírgula ou vírgula: <code>nome;telefone;setor;loja;cargo;nascimento</code>. O cabeçalho é opcional; cargo e nascimento podem ficar vazios (e, para quem já está no cadastro, mantêm o valor atual). Quem já está no cadastro (mesmo telefone) é atualizado. Telefone sem <code>+</code> é do Brasil (com DDD); número de outro país vai com <code>+&lt;código do país&gt;</code>, ex.: <code>+1 415 555 0123</code>. Arquivo em UTF-8 ou salvo pelo Excel.</p>
     <form method="post" action="/equipe/importar" style="display:grid;gap:8px">
       <input type="file" accept=".csv,text/csv,text/plain" id="arquivo">
       <textarea name="csv" id="csv" rows="10" placeholder="Ana Souza;83999990001;Vendas;Centro;Gerente;10/05/1990">${esc(csv)}</textarea>

@@ -25,7 +25,7 @@ Built for recruitment (candidate → questions → CV), designed to be reused fo
 
 Hiring through WhatsApp usually means a person copying names from chats and digging CVs out of a phone gallery. Off-the-shelf WhatsApp gateways solve the connection but leave you to build the conversation, the storage and the privacy rules yourself.
 
-Ttalk is the whole thing in one small process: one WhatsApp number, as many bots as you have openings, a web panel to create them, and a vault for what candidates send. No browser, no Redis, no PostgreSQL.
+Ttalk is the whole thing in one small process: one or more WhatsApp numbers (recruitment or company groups), as many bots as you have openings, a web panel to create them, and a vault for what candidates send. No browser, no Redis, no PostgreSQL.
 
 ## Features
 
@@ -40,7 +40,7 @@ Ttalk is the whole thing in one small process: one WhatsApp number, as many bots
 **Admin panel**
 - **Create, edit, copy, open and close bots** in the browser. Changes apply instantly, with no restart.
 - Candidate list per opening, file download, **ZIP export (CSV + files)** ready for AI screening.
-- Connection page with QR code, health page, full audit log (who viewed, downloaded, exported or deleted what).
+- **Numbers** page (one QR code per number), health page, full audit log (who viewed, downloaded, exported or deleted what).
 - **Several WhatsApp numbers in one process.** Each number has one role: *recruitment* (candidates) or *groups* (company groups). A ban on one never touches the other.
 - **Group bot core.** Team registry (with CSV import/export), managers, and WhatsApp commands: `/menu`, `/gestores`, `/quem`, `/cadastrar`, `/setores`, `/desconhecidos`, `/grupos`, `/gestor add|remover`, `/status`, `/log`. Only registered managers can run management commands; being a WhatsApp group admin grants nothing. Plain group chat is never stored.
 
@@ -54,7 +54,7 @@ Ttalk is the whole thing in one small process: one WhatsApp number, as many bots
 | Media can always be downloaded | Download retries plus media re-upload request when the link expires |
 | Account status is visible | `/saude` page and a data-free `/healthz` for uptime monitors |
 
-**Anti-ban behaviour**: reply-only, read receipts, "typing…" for 1 to 4 s scaled to message length, at least 1.5 s between messages per chat, 20 per minute overall, randomised greeting variants, never shown as permanently online, no history sync, exponential reconnect backoff, and a full stop on logout instead of hammering.
+**Anti-ban behaviour**: reply-only, read receipts, "typing…" for 1 to 4 s scaled to message length, at least 1.5 s between messages per chat, 20 per minute per number, randomised greeting variants, never shown as permanently online, no history sync, exponential reconnect backoff, and a full stop on logout instead of hammering.
 
 ## Screenshots
 

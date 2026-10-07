@@ -13,7 +13,7 @@ WhatsApp ─► ConexaoBaileys ─► Orquestrador ─► Motor (regras, sem efe
                ▲   (adaptador)     │  grava estado + respostas na mesma transação
                │                   ▼
            Expedidor ◄──── caixa de saída (SQLite) ──── Painel (Fastify)
-     (digitando, 1,5 s/conversa, 20/min)
+     (digitando, 1,5 s/conversa, 20/min por número)
 ```
 
 - `src/conversa/motor.ts` decide tudo a partir da configuração do bot e devolve ações. Não fala com o WhatsApp nem com o banco, por isso é testado por inteiro sem conexão.
@@ -81,7 +81,8 @@ Para o Uptime Kuma: monitor HTTP em `/healthz` (público, responde `{"ok":true}`
 
 - **Números:** painel → *Números*. Cada número tem um uso só: *Recrutamento* (candidatos) ou *Grupos* (grupos da empresa). Para conectar: abrir o número → no celular dele, *Aparelhos conectados* → *Conectar aparelho* → ler o QR.
 - **Se o celular desconectar o aparelho** (logout): o bot para aquele número, avisa por e-mail dizendo qual, e a página do número oferece "Gerar novo QR". A sessão antiga é copiada para `data/sessoes-antigas/<id>-<data-hora>` antes.
-- **Bot de grupos:** cadastre a equipe em *Equipe* (ou importe um CSV `nome;telefone;setor;loja;cargo;nascimento`), marque pelo menos um gestor e adicione o número de grupos aos grupos. Comandos: `/menu`. Só gestores cadastrados mandam comandos de gestão; ser admin do grupo no WhatsApp não dá poder no bot. Conversa comum dos grupos nunca é gravada.
+- **Bot de grupos:** cadastre a equipe em *Equipe* (ou importe um CSV `nome;telefone;setor;loja;cargo;nascimento` — separado por ponto e vírgula ou vírgula, em UTF-8 ou no formato do Excel (Windows-1252); telefone sem `+` é do Brasil, número de outro país vai com `+<código do país>`, ex.: `+1 415 555 0123`), marque pelo menos um gestor e adicione o número de grupos aos grupos. Comandos: `/menu`. Só gestores cadastrados mandam comandos de gestão; ser admin do grupo no WhatsApp não dá poder no bot. Conversa comum dos grupos nunca é gravada.
+- **Ao ativar um número novo:** o `/healthz` fica em 503 (e o monitor dispara) até todos os números ativos estarem conectados — ou seja, até o QR do novo ser lido.
 - **Toda semana:** página *Saúde* — conexão, fila zerada, último backup.
 - **Depois do processo:** *Encerrar inscrições* no editor do bot e *Exportar ZIP* (CSV + currículos) para a triagem com IA.
 - **Excluir candidato:** botão na lista do processo, ou o próprio candidato escreve "excluir meus dados" e confirma com SIM.
@@ -111,7 +112,9 @@ Com `SMTP_URL` e `ALERTA_EMAIL_PARA`, o bot manda e-mail quando a conexão fica 
 
 ## Comportamento anti-banimento já implementado
 
-Nunca inicia conversa (resposta só para quem escreveu nas últimas `JANELA_RESPOSTA_HORAS`, padrão 24 h), marca como lida, "digitando..." de 1 a 4 s, 1,5 s entre mensagens da conversa e 20 por minuto no total, três versões da boas-vindas, `markOnlineOnConnect: false`, `syncFullHistory: false`, reconexão com espera crescente (2 s → 5 min) e parada no logout em vez de insistir.
+Nunca inicia conversa (resposta só para quem escreveu nas últimas `JANELA_RESPOSTA_HORAS`, padrão 24 h), marca como lida, "digitando..." de 1 a 4 s, 1,5 s entre mensagens da conversa e 20 por minuto por número, três versões da boas-vindas, `markOnlineOnConnect: false`, `syncFullHistory: false`, reconexão com espera crescente (2 s → 5 min) e parada no logout em vez de insistir.
+
+No bot de grupos: no máximo 10 mensagens por minuto por número, 3 s ou mais entre mensagens do mesmo chat, "digitando..." de 1 a 2 s, e os comandos comuns têm freio — o mesmo comando repetido pela mesma pessoa em menos de 60 s, ou por qualquer pessoa no mesmo grupo em menos de 15 s, é ignorado. Resposta que ficou mais de 30 minutos na fila é descartada.
 
 ## Antes de colocar em produção
 
