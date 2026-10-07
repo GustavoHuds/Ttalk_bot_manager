@@ -12,7 +12,8 @@ import {
   type GroupMetadata,
   type WAMessage
 } from '@whiskeysockets/baileys'
-import type { InfoGrupo, MembroGrupo, Pessoa } from '../grupos/tipos.js'
+import { ehComando } from '../grupos/comandos.js'
+import type { InfoGrupo, MembroGrupo, MensagemGrupo, Pessoa } from '../grupos/tipos.js'
 import type { Entrada } from '../conversa/tipos.js'
 
 /** Números do Baileys podem chegar como Long. */
@@ -158,4 +159,18 @@ export function membrosDoGrupo(g: GroupMetadata, eu: string[]): MembroGrupo[] {
       const pn = p.phoneNumber ? jidNormalizedUser(p.phoneNumber) : null
       return { jid: id, telefone: telefoneDoJid(id) ?? telefoneDoJid(pn), lid: lidDe(p.id, p.lid), admin: !!p.admin }
     })
+}
+
+/**
+ * Decide se a mensagem é um comando de grupo e já a traduz. Conversa comum (texto que não
+ * começa com "/") nunca sai daqui: quem chama não grava nada no banco nem loga o texto.
+ */
+export function comandoDaMensagem(msg: WAMessage, numeroId: number): MensagemGrupo | null {
+  if (msg.key.fromMe || !msg.key.id || !msg.message) return null
+  const texto = textoDaMensagem(msg)
+  if (!texto || !ehComando(texto)) return null
+  const origem = origemComando(msg)
+  if (!origem) return null
+  const recebidaEm = (paraNumero(msg.messageTimestamp) ?? Math.floor(Date.now() / 1000)) * 1000
+  return { numeroId, id: msg.key.id, ...origem, texto, ...mencoesDaMensagem(msg), recebidaEm }
 }

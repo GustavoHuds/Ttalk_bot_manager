@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { GroupMetadata, WAMessage } from '@whiskeysockets/baileys'
 import { entradaDaMensagem, hashOpcao, identidade, opcoesVotadas } from '../src/whatsapp/normalizar.js'
 import {
+  comandoDaMensagem,
   infoDoGrupo,
   jidIgnoradoGrupos,
   membrosDoGrupo,
@@ -110,5 +111,56 @@ describe('bot de grupos: leitura das mensagens', () => {
       { jid: '5583999990002@s.whatsapp.net', telefone: '5583999990002', lid: null, admin: true }
     ])
     expect(souEu(eu, '5583900000000:7@s.whatsapp.net')).toBe(true)
+  })
+
+  it('grupo com endereçamento por telefone: o participant já é o telefone, o alt é o LID', () => {
+    const msg = msgGrupo({
+      key: { remoteJid: '120363-1@g.us', participant: '5583999990001@s.whatsapp.net', participantAlt: '111@lid', id: 'X', fromMe: false }
+    })
+    expect(origemComando(msg)).toEqual({
+      chat: '120363-1@g.us',
+      ehGrupo: true,
+      remetente: { jid: '5583999990001@s.whatsapp.net', telefone: '5583999990001', lid: '111@lid' }
+    })
+  })
+
+  it('souEu também reconhece o participante pelo campo lid do objeto (não só id/phoneNumber)', () => {
+    const eu = ['5583900000000@s.whatsapp.net', '888@lid']
+    expect(souEu(eu, { id: '999@s.whatsapp.net', lid: '888@lid' })).toBe(true)
+    expect(souEu(eu, { id: '999@s.whatsapp.net', lid: '777@lid' })).toBe(false)
+  })
+
+  it('textoDaMensagem ignora legenda de foto: comando não vem em legenda', () => {
+    const comLegenda = msgGrupo({ message: { imageMessage: { caption: '/quem @222' } } })
+    expect(textoDaMensagem(comLegenda)).toBeNull()
+  })
+})
+
+describe('bot de grupos: o que vira comando', () => {
+  it('texto comum (sem barra) nunca vira comando: a conversa do grupo não é revelada', () => {
+    const comum = msgGrupo({ message: { extendedTextMessage: { text: 'bom dia a todos' } } })
+    expect(comandoDaMensagem(comum, 7)).toBeNull()
+  })
+
+  it('mensagem do próprio bot, sem id ou sem conteúdo nunca é comando', () => {
+    const comFromMe = msgGrupo({
+      key: { remoteJid: '120363-1@g.us', participant: '111@lid', participantAlt: '5583999990001@s.whatsapp.net', id: 'X', fromMe: true }
+    })
+    expect(comandoDaMensagem(comFromMe, 7)).toBeNull()
+    expect(comandoDaMensagem({ key: { remoteJid: '120363-1@g.us', participant: '111@lid' }, message: null } as unknown as WAMessage, 7)).toBeNull()
+  })
+
+  it('comando reconhecido chega pronto para o motor, com o numeroId da conexão', () => {
+    expect(comandoDaMensagem(msgGrupo(), 7)).toEqual({
+      numeroId: 7,
+      id: 'X',
+      chat: '120363-1@g.us',
+      ehGrupo: true,
+      remetente: { jid: '111@lid', telefone: '5583999990001', lid: '111@lid' },
+      texto: '/quem @222',
+      mencionados: ['222@lid'],
+      citada: null,
+      recebidaEm: expect.any(Number)
+    })
   })
 })
