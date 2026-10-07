@@ -1,9 +1,9 @@
 import type { Logger } from 'pino'
 import type { RepoGrupos } from '../db/grupos.js'
 import type { Repositorio } from '../db/repositorio.js'
-import { acharComando, interpretar } from './comandos.js'
+import { acharComando, interpretar, type Comando } from './comandos.js'
 import { processarComando } from './motor.js'
-import { pessoaDoJid, telefoneCanonico, usuarioDoJid, vinculosDeLid } from './pessoas.js'
+import { chaveTelefone, pessoaDoJid, usuarioDoJid, vinculosDeLid } from './pessoas.js'
 import type { AcaoGrupo, ConexaoGrupos, ContextoGrupos, EnvioGrupo, EventoGrupos, MembroGrupo, MensagemGrupo, Pessoa } from './tipos.js'
 
 export interface DependenciasGrupos {
@@ -22,6 +22,13 @@ export interface DependenciasGrupos {
 /** Comando mais velho que isso (fila do WhatsApp ao reconectar) não é executado. */
 export const JANELA_COMANDO_MS = 10 * 60 * 1000
 
+/** Mesma pessoa repetindo o mesmo comando comum neste chat: ignorado se mais rápido que isto. */
+const JANELA_REPETICAO_REMETENTE_MS = 60 * 1000
+/** Qualquer pessoa repetindo o mesmo comando comum neste chat: ignorado se mais rápido que isto. */
+const JANELA_REPETICAO_CHAT_MS = 15 * 1000
+/** Tamanho máximo da memória do freio antes de descartar entradas antigas. */
+const LIMITE_MEMORIA_REPETICAO = 5000
+
 const FALHA = 'Não consegui concluir esse comando agora. Tente de novo em instantes.'
 
 /**
@@ -32,22 +39,60 @@ const FALHA = 'Não consegui concluir esse comando agora. Tente de novo em insta
 export class OrquestradorGrupos {
   private filas = new Map<string, Promise<void>>()
   private readonly relogio: () => number
+  /** Último horário em que (número, chat, remetente, comando) foi aceito. */
+  private readonly ultimoPorRemetente = new Map<string, number>()
+  /** Último horário em que (número, chat, comando) foi aceito, de qualquer remetente. */
+  private readonly ultimoPorChat = new Map<string, number>()
 
   constructor(private readonly d: DependenciasGrupos) {
     this.relogio = d.relogio ?? Date.now
   }
 
-  /** Comandos do mesmo chat são tratados em ordem; chats diferentes não esperam uns pelos outros. */
+  /**
+   * Comandos do mesmo chat são tratados em ordem; chats diferentes não esperam uns pelos outros.
+   * Comando comum (não de gestor) repetido rápido demais no mesmo grupo é descartado aqui mesmo,
+   * antes de entrar na fila: nem dedupe, nem resposta — só um freio contra spam, não contra reenvio.
+   */
   receber(m: MensagemGrupo): void {
+    const cmd = interpretar(m.texto, m.mencionados, m.citada)
+    if (cmd && m.ehGrupo) {
+      const def = acharComando(cmd.nome)
+      if (def && !def.gestor && !this.podeProcessar(m, cmd, this.relogio())) {
+        this.d.log.debug({ mensagem: m.id, numero: m.numeroId }, 'comando comum ignorado por repetição rápida')
+        return
+      }
+    }
     const chave = `${m.numeroId}:${m.chat}`
     const anterior = this.filas.get(chave) ?? Promise.resolve()
     const proxima = anterior
-      .then(() => this.tratar(m))
+      .then(() => this.tratar(m, cmd))
       .catch((err) => this.d.log.error({ err, mensagem: m.id, numero: m.numeroId }, 'falha inesperada no comando'))
       .finally(() => {
         if (this.filas.get(chave) === proxima) this.filas.delete(chave)
       })
     this.filas.set(chave, proxima)
+  }
+
+  /** Decide e, se aceitar, já marca o horário (false não marca: permite tentar de novo logo). */
+  private podeProcessar(m: MensagemGrupo, cmd: Comando, agora: number): boolean {
+    const chaveRemetente = `${m.numeroId}:${m.chat}:${m.remetente.jid}:${cmd.nome}`
+    const chaveChat = `${m.numeroId}:${m.chat}:${cmd.nome}`
+    const ultimoRemetente = this.ultimoPorRemetente.get(chaveRemetente)
+    if (ultimoRemetente !== undefined && agora - ultimoRemetente < JANELA_REPETICAO_REMETENTE_MS) return false
+    const ultimoChat = this.ultimoPorChat.get(chaveChat)
+    if (ultimoChat !== undefined && agora - ultimoChat < JANELA_REPETICAO_CHAT_MS) return false
+    this.marcarRepeticao(this.ultimoPorRemetente, chaveRemetente, agora, JANELA_REPETICAO_REMETENTE_MS)
+    this.marcarRepeticao(this.ultimoPorChat, chaveChat, agora, JANELA_REPETICAO_CHAT_MS)
+    return true
+  }
+
+  /** Grava o horário; se a memória cresceu demais, aproveita para jogar fora quem já saiu da janela. */
+  private marcarRepeticao(mapa: Map<string, number>, chave: string, agora: number, janela: number): void {
+    mapa.set(chave, agora)
+    if (mapa.size <= LIMITE_MEMORIA_REPETICAO) return
+    for (const [k, v] of mapa) {
+      if (agora - v > janela) mapa.delete(k)
+    }
   }
 
   /** Espera todas as filas esvaziarem (testes e desligamento). */
@@ -82,23 +127,33 @@ export class OrquestradorGrupos {
     }
   }
 
-  private async tratar(m: MensagemGrupo): Promise<void> {
-    if (this.relogio() - m.recebidaEm > JANELA_COMANDO_MS) return
+  private async tratar(m: MensagemGrupo, cmd: Comando | null): Promise<void> {
+    const atraso = this.relogio() - m.recebidaEm
+    if (atraso > JANELA_COMANDO_MS) {
+      this.d.log.debug({ mensagem: m.id, atraso }, 'comando antigo (fila ao reconectar) ignorado')
+      return
+    }
     if (this.d.grupos.comandoVisto(m.numeroId, m.id)) return
-    const cmd = interpretar(m.texto, m.mencionados, m.citada)
     if (!cmd) return
     const conexao = this.d.conexao(m.numeroId)
     const def = acharComando(cmd.nome)
+    const precisaMembros = !!def?.precisaMembros
 
-    const remetente = await this.completar(conexao, m.remetente)
+    let remetente = await this.completar(conexao, m.remetente)
     const mencionados = await Promise.all(m.mencionados.map((j) => this.completar(conexao, pessoaDoJid(j))))
     const citada = m.citada ? await this.completar(conexao, pessoaDoJid(m.citada)) : null
-    const membros = m.ehGrupo ? await this.lerGrupo(conexao, m, !!def?.precisaMembros) : null
+    const membros = m.ehGrupo ? await this.lerGrupo(conexao, m, precisaMembros) : null
 
     // Daqui em diante é síncrono: o retrato do banco e a gravação não se intercalam com outro comando.
     const agora = this.relogio()
     const g = this.d.grupos
     const funcionarios = g.funcionarios()
+    // O WhatsApp pode não informar o telefone do LID desta vez; se a pessoa já está no cadastro
+    // com esse LID (de uma mensagem anterior), usa o telefone de lá em vez de identificar pelo LID cru.
+    if (!remetente.telefone && remetente.lid) {
+      const porLid = funcionarios.find((f) => f.lid === remetente.lid)
+      if (porLid?.telefone) remetente = { ...remetente, telefone: porLid.telefone }
+    }
     const ctx: ContextoGrupos = {
       agora,
       chat: m.chat,
@@ -110,28 +165,32 @@ export class OrquestradorGrupos {
       gestores: new Set(g.gestores()),
       grupo: m.ehGrupo ? g.grupo(m.numeroId, m.chat) : null,
       grupos: g.grupos(m.numeroId),
-      membros: def?.precisaMembros ? membros : null,
+      membros: precisaMembros ? membros : null,
       auditoria: this.d.repo.auditoriaRecente(30),
       conectadoDesde: this.d.conectadoDesde?.(m.numeroId) ?? null
     }
     const acoes = processarComando(ctx, cmd)
-    const vistos = [remetente, ...mencionados, ...(citada ? [citada] : []), ...(membros ?? [])]
-    const vinculos = vinculosDeLid(funcionarios, vistos)
+    // Comando ignorado (silêncio) não muda nada no banco além do dedupe: nem liga LID.
+    const vistos = [remetente, ...mencionados, ...(citada ? [citada] : []), ...(ctx.membros ?? [])]
+    const vinculos = acoes.length > 0 ? vinculosDeLid(funcionarios, vistos) : []
     const usuario = `wa:${remetente.telefone ?? remetente.lid ?? usuarioDoJid(remetente.jid)}`
+    let enfileirou = false
     try {
-      this.aplicar(m, acoes, vinculos, usuario, agora)
+      enfileirou = this.aplicar(m, acoes, vinculos, usuario, agora)
     } catch (err) {
       this.d.log.error({ err, mensagem: m.id, numero: m.numeroId }, 'erro ao executar comando')
-      if (acoes.length > 0) this.aplicar(m, [{ tipo: 'responder', texto: FALHA }], [], usuario, agora)
+      if (acoes.length > 0) enfileirou = this.aplicar(m, [{ tipo: 'responder', texto: FALHA }], [], usuario, agora)
     }
+    // Fora do try: um erro do próprio avisador não deve disparar a resposta de falha por engano.
+    if (enfileirou) this.d.aoEnfileirar?.(m.numeroId)
   }
 
-  /** Descobre o telefone por trás do LID quando o WhatsApp sabe. */
+  /** Descobre o telefone por trás do LID quando o WhatsApp sabe (de qualquer país, sem assumir Brasil). */
   private async completar(conexao: ConexaoGrupos | null, p: Pessoa): Promise<Pessoa> {
-    const telefone = telefoneCanonico(p.telefone)
+    const telefone = chaveTelefone(p.telefone)
     if (telefone || !p.lid || !conexao) return { ...p, telefone }
     try {
-      return { ...p, telefone: telefoneCanonico(await conexao.telefoneDoLid(p.lid)) }
+      return { ...p, telefone: chaveTelefone(await conexao.telefoneDoLid(p.lid)) }
     } catch {
       return { ...p, telefone: null }
     }
@@ -139,7 +198,7 @@ export class OrquestradorGrupos {
 
   /**
    * Grupo desconhecido (evento perdido) é lido e gravado uma vez. A lista de participantes
-   * só é buscada quando o comando precisa dela.
+   * só é buscada (e cada um só é completado com o LID→telefone) quando o comando precisa dela.
    */
   private async lerGrupo(conexao: ConexaoGrupos | null, m: MensagemGrupo, precisaMembros: boolean): Promise<MembroGrupo[] | null> {
     const conhecido = this.d.grupos.grupo(m.numeroId, m.chat)
@@ -147,6 +206,7 @@ export class OrquestradorGrupos {
     try {
       const md = await conexao.metadados(m.chat)
       this.d.grupos.salvarGrupo(m.numeroId, md.jid, md.nome, md.botAdmin, this.relogio())
+      if (!precisaMembros) return null
       return await Promise.all(md.membros.map(async (x) => ({ ...(await this.completar(conexao, x)), admin: x.admin })))
     } catch (err) {
       this.d.log.warn({ err, numero: m.numeroId }, 'não foi possível ler os dados do grupo')
@@ -154,7 +214,8 @@ export class OrquestradorGrupos {
     }
   }
 
-  private aplicar(m: MensagemGrupo, acoes: AcaoGrupo[], vinculos: { id: number; lid: string }[], usuario: string, agora: number): void {
+  /** Devolve true se algo foi enfileirado para sair (quem chama avisa o remetente depois, fora da transação). */
+  private aplicar(m: MensagemGrupo, acoes: AcaoGrupo[], vinculos: { id: number; lid: string }[], usuario: string, agora: number): boolean {
     const g = this.d.grupos
     let enfileirou = false
     this.d.repo.transacao(() => {
@@ -182,6 +243,6 @@ export class OrquestradorGrupos {
         }
       }
     })
-    if (enfileirou) this.d.aoEnfileirar?.(m.numeroId)
+    return enfileirou
   }
 }

@@ -127,6 +127,13 @@ describe('orquestrador do bot de grupos', () => {
     expect(saida()[0]!.texto).toContain('Carla Dias cadastrado(a)')
   })
 
+  it('telefone estrangeiro do mencionado (via LID) é guardado como veio, sem virar brasileiro', async () => {
+    falsa.lids.set('777@lid', '14155550123')
+    await enviar(msg('/cadastrar @777 Carla Dias | Estoque | Norte', { mencionados: ['777@lid'] }))
+    const carla = grupos.porTelefone('14155550123')
+    expect(carla).toMatchObject({ nome: 'Carla Dias', telefone: '14155550123', lid: '777@lid' })
+  })
+
   it('falha ao gravar desfaz tudo e avisa que não conseguiu', async () => {
     vi.spyOn(grupos, 'salvarFuncionario').mockImplementation(() => {
       throw new Error('disco cheio')
@@ -134,6 +141,8 @@ describe('orquestrador do bot de grupos', () => {
     await enviar(msg('/cadastrar @777 Carla Dias | Estoque | Norte', { mencionados: ['777@lid'] }))
     expect(saida().map((s) => s.texto)).toEqual(['Não consegui concluir esse comando agora. Tente de novo em instantes.'])
     expect(repo.auditoriaRecente(5)).toEqual([])
+    expect(dedupe()).toBe(1)
+    expect(grupos.funcionarios()).toHaveLength(1)
   })
 
   it('grupo desconhecido é lido uma vez e gravado; membros só quando o comando pede', async () => {
@@ -157,6 +166,81 @@ describe('orquestrador do bot de grupos', () => {
   it('privado de estranho: nada é respondido', async () => {
     await enviar(msg('/menu', { chat: '999@lid', ehGrupo: false, remetente: { jid: '999@lid', telefone: null, lid: '999@lid' } }))
     expect(saida('999@lid')).toEqual([])
+    expect(repo.auditoriaRecente(5)).toEqual([])
+    expect(dedupe()).toBe(1)
+  })
+
+  it('texto comum (sem barra) não gera dedupe nem fila', async () => {
+    await enviar(msg('bom dia, time!'))
+    expect(saida()).toEqual([])
+    expect(dedupe()).toBe(0)
+  })
+
+  it('erro ao buscar metadados do grupo responde com aviso e não trava os próximos comandos', async () => {
+    let falhar = true
+    const original = falsa.conexao.metadados
+    falsa.conexao.metadados = async (jid: string) => {
+      if (falhar) {
+        falhar = false
+        throw new Error('timeout')
+      }
+      return original(jid)
+    }
+    await enviar(msg('/gestores'))
+    expect(saida()).toEqual([{ tipo: 'texto', texto: 'Não consegui ler os participantes agora. Tente de novo em instantes.' }])
+    t += 61_000 // além do freio anti-spam, para isolar o teste do próximo comando de fato ser atendido
+    await enviar(msg('/gestores'))
+    expect(saida()).toEqual([{ tipo: 'texto', texto: '👔 Gestores deste grupo: @111', mencoes: ['111@lid'] }])
+  })
+
+  it('telefone do remetente vem do cadastro quando o WhatsApp não informa o LID desta vez', async () => {
+    grupos.vincularLid(ana, '111@lid', AGORA)
+    falsa.lids.delete('111@lid')
+    falsa.lids.set('777@lid', '5583988887777')
+    await enviar(msg('/cadastrar @777 Carla Dias | Estoque | Norte', { mencionados: ['777@lid'] }))
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ usuario: 'wa:5583999990001', acao: 'cadastrar_funcionario' })
+  })
+
+  it('comando de gestor ignorado (vindo de quem não é gestor) não liga o LID de quem enviou', async () => {
+    const bruno = grupos.salvarFuncionario(
+      null,
+      { nome: 'Bruno', telefone: '5583999990002', lid: null, setor: 'Vendas', loja: 'Centro', cargo: null, nascimento: null, ativo: true },
+      AGORA
+    )
+    falsa.lids.set('222@lid', '5583999990002')
+    await enviar(msg('/status', { remetente: { jid: '222@lid', telefone: null, lid: '222@lid' } }))
+    expect(saida()).toEqual([])
+    expect(grupos.funcionario(bruno)!.lid).toBeNull()
+    expect(dedupe()).toBe(1)
+  })
+
+  it('freio anti-spam: a mesma pessoa repetindo um comando comum em menos de 1 minuto recebe só a primeira resposta', async () => {
+    await enviar(msg('/menu'))
+    t += 10_000
+    await enviar(msg('/menu'))
+    expect(saida()).toHaveLength(1)
+    expect(dedupe()).toBe(1)
+  })
+
+  it('freio anti-spam: pessoas diferentes com folga de tempo recebem resposta cada uma', async () => {
+    await enviar(msg('/menu'))
+    t += 20_000
+    await enviar(msg('/menu', { remetente: { jid: '222@lid', telefone: null, lid: '222@lid' } }))
+    expect(saida()).toHaveLength(2)
+  })
+
+  it('freio anti-spam: o mesmo comando comum por pessoas diferentes em menos de 15s segura a segunda', async () => {
+    await enviar(msg('/menu'))
+    t += 5_000
+    await enviar(msg('/menu', { remetente: { jid: '222@lid', telefone: null, lid: '222@lid' } }))
+    expect(saida()).toHaveLength(1)
+  })
+
+  it('freio anti-spam: comando de gestor nunca é seguro mesmo repetido rápido', async () => {
+    await enviar(msg('/status'))
+    t += 1_000
+    await enviar(msg('/status'))
+    expect(saida()).toHaveLength(2)
   })
 
   it('eventos: lista completa desativa ausentes; bot vira admin; bot sai; renomeado', () => {

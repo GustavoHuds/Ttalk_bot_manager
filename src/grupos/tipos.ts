@@ -26,6 +26,7 @@ export interface MensagemGrupo {
   mencionados: string[]
   /** Autor da mensagem respondida (citada), se houver. */
   citada: string | null
+  /** messageTimestamp em ms. */
   recebidaEm: number
 }
 
@@ -56,7 +57,7 @@ export interface ConexaoGrupos {
   enviarTexto(jid: string, texto: string, mencoes?: string[]): Promise<void>
   listarGrupos(): Promise<InfoGrupo[]>
   metadados(jid: string): Promise<MetadadosGrupo>
-  /** Telefone por trás de um LID, se o WhatsApp já informou. */
+  /** Telefone por trás de um LID, se o WhatsApp já informou. Só dígitos, já com DDI. */
   telefoneDoLid(lid: string): Promise<string | null>
 }
 
