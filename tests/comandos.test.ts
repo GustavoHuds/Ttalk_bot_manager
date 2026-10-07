@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Funcionario } from '../src/db/grupos.js'
 import { COMANDOS, acharComando, ehComando, interpretar } from '../src/grupos/comandos.js'
-import { acharFuncionario, formatarTelefone, pessoaDoJid, telefoneCanonico, usuarioDoJid, vinculosDeLid } from '../src/grupos/pessoas.js'
+import { acharFuncionario, chaveTelefone, formatarTelefone, pessoaDoJid, telefoneCanonico, usuarioDoJid, vinculosDeLid } from '../src/grupos/pessoas.js'
 
 const f = (id: number, telefone: string | null, lid: string | null): Funcionario => ({
   id,
@@ -46,7 +46,31 @@ describe('parser de comandos', () => {
     expect(acharComando('help')!.nome).toBe('menu')
     expect(acharComando('cadastrar')!.gestor).toBe(true)
     expect(acharComando('xyz')).toBeNull()
+    expect(acharComando('hasOwnProperty')).toBeNull()
     expect(new Set(COMANDOS.map((c) => c.nome)).size).toBe(COMANDOS.length)
+  })
+
+  it('barra seguida de outra barra não é comando; pontuação depois do nome é', () => {
+    expect(ehComando('/menu/x')).toBe(false)
+    expect(interpretar('/menu/x')).toBeNull()
+    expect(ehComando('/home/x')).toBe(false)
+    expect(interpretar('/home/x')).toBeNull()
+    expect(ehComando('/menu.')).toBe(true)
+    expect(interpretar('/menu.')!.nome).toBe('menu')
+    expect(ehComando(`/menu ${'x'.repeat(2001)}`)).toBe(false)
+  })
+
+  it('quebras de linha nos argumentos colapsam para um espaço', () => {
+    expect(interpretar('/cadastrar Ana\nSouza | Vendas')!.args).toBe('Ana Souza | Vendas')
+  })
+
+  it('acento decomposto (NFD) também é reconhecido', () => {
+    expect(interpretar('/Gestóres')!.nome).toBe('gestores')
+  })
+
+  it('marca invisível (LRM) antes da barra não impede o reconhecimento', () => {
+    expect(ehComando('‎/menu')).toBe(true)
+    expect(interpretar('‎/menu')!.nome).toBe('menu')
   })
 })
 
@@ -59,6 +83,13 @@ describe('pessoas', () => {
     expect(telefoneCanonico('123')).toBeNull()
     expect(telefoneCanonico(null)).toBeNull()
     expect(formatarTelefone('5583999990001')).toBe('+55 83 99999-0001')
+    expect(formatarTelefone('558332220000')).toBe('+55 83 3222-0000')
+    expect(formatarTelefone('14155550123')).toBe('+14155550123')
+  })
+
+  it('zero de discagem antes do DDD some; DDD começando em 0 é rejeitado', () => {
+    expect(telefoneCanonico('083 99999-0001')).toBe('5583999990001')
+    expect(telefoneCanonico('(00) 99999-0001')).toBeNull()
   })
 
   it('JID solto vira pessoa; dispositivo é ignorado', () => {
@@ -69,13 +100,31 @@ describe('pessoas', () => {
       lid: null
     })
     expect(pessoaDoJid('111:3@lid')).toEqual({ jid: '111:3@lid', telefone: null, lid: '111@lid' })
+    expect(pessoaDoJid('x@g.us')).toEqual({ jid: 'x@g.us', telefone: null, lid: null })
   })
 
-  it('acha no cadastro pelo telefone, senão pelo LID', () => {
+  it('telefone estrangeiro: o JID já traz o código do país, não leva o 55 do Brasil', () => {
+    // Celular dos EUA (código 1), 11 dígitos: a regra antiga prefixava 55 e inventava um número.
+    expect(pessoaDoJid('14155550123@s.whatsapp.net').telefone).toBe('14155550123')
+    // Número de 12 dígitos que não é brasileiro (código 52, México): fica com os dígitos como vieram.
+    expect(pessoaDoJid('521771234567@s.whatsapp.net').telefone).toBe('521771234567')
+    // chaveTelefone trata 10/11 dígitos como número brasileiro digitado localmente (regra combinada);
+    // por isso a comparação é feita com números de outro tamanho (12+), como no teste abaixo.
+    expect(chaveTelefone('521771234567')).toBe('521771234567')
+  })
+
+  it('acha no cadastro pelo telefone, senão pelo LID; telefone tem prioridade sobre LID', () => {
     const lista = [f(1, '5583999990001', null), f(2, null, '222@lid')]
     expect(acharFuncionario(lista, { jid: 'x', telefone: '558399990001', lid: null })!.id).toBe(1)
     expect(acharFuncionario(lista, { jid: 'x', telefone: null, lid: '222@lid' })!.id).toBe(2)
     expect(acharFuncionario(lista, { jid: 'x', telefone: null, lid: '333@lid' })).toBeNull()
+    // Telefone bate com o 1, LID bate com o 2: telefone decide.
+    expect(acharFuncionario(lista, { jid: 'x', telefone: '5583999990001', lid: '222@lid' })!.id).toBe(1)
+  })
+
+  it('acha no cadastro um telefone estrangeiro', () => {
+    const lista = [f(1, '521771234567', null)]
+    expect(acharFuncionario(lista, { jid: 'x', telefone: '521771234567', lid: null })!.id).toBe(1)
   })
 
   it('LID novo só é ligado a quem tem o telefone e ainda não tem LID', () => {

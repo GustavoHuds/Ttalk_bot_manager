@@ -50,19 +50,26 @@ export interface Comando {
   citada: string | null
 }
 
-const PREFIXO = /^\s*\/(\p{L}[\p{L}\d_-]*)/u
+/**
+ * Permite marcas invisíveis antes da barra (LRM/RLM/zero-width/BOM — o WhatsApp às vezes as manda),
+ * aceita letra com marca de acento solta (texto não normalizado) e exige que o nome termine numa
+ * borda de palavra, senão "/menu/x" ou "/home/x" seriam lidos como comando "menu"/"home".
+ */
+const PREFIXO = /^[\s​-‏﻿]*\/(\p{L}[\p{L}\p{M}\d_-]*)(?=$|[\s|@.,!?])/u
 /** Comando é coisa curta; texto enorme não é interpretado. */
 const TAMANHO_MAXIMO = 2000
 
 export function ehComando(texto: string | null | undefined): boolean {
-  return !!texto && PREFIXO.test(texto)
+  if (!texto || texto.length > TAMANHO_MAXIMO) return false
+  return PREFIXO.test(texto.normalize('NFC'))
 }
 
 export function interpretar(texto: string, mencionados: string[] = [], citada: string | null = null): Comando | null {
   if (texto.length > TAMANHO_MAXIMO) return null
-  const m = PREFIXO.exec(texto)
+  const t = texto.normalize('NFC')
+  const m = PREFIXO.exec(t)
   if (!m) return null
-  const args = texto
+  const args = t
     .slice(m[0].length)
     .replace(/@\d+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -77,6 +84,6 @@ export function interpretar(texto: string, mencionados: string[] = [], citada: s
 }
 
 export function acharComando(nome: string): DefComando | null {
-  const alvo = APELIDOS[nome] ?? nome
+  const alvo = Object.hasOwn(APELIDOS, nome) ? APELIDOS[nome]! : nome
   return COMANDOS.find((c) => c.nome === alvo) ?? null
 }

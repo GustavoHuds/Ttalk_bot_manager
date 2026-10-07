@@ -3,19 +3,40 @@ import type { Funcionario } from '../db/grupos.js'
 import type { Pessoa } from './tipos.js'
 
 /**
- * Forma única de guardar e comparar telefones: 55 + DDD + número, com o 9 dos celulares.
+ * Forma única de guardar e comparar telefones brasileiros: 55 + DDD + número, com o 9 dos celulares.
  * O WhatsApp ainda entrega alguns celulares antigos com 8 dígitos (55 83 9999-0001); aqui o 9 volta.
+ * Um zero de discagem na frente do DDD ("083...") é descartado; DDD não existe começando em 0, então é rejeitado.
  */
 export function telefoneCanonico(texto: string | null | undefined): string | null {
   if (!texto) return null
-  const t = normalizarTelefone(texto)
+  let dig = texto.replace(/\D/g, '')
+  if (dig.length > 0 && dig[0] === '0') dig = dig.slice(1)
+  const t = normalizarTelefone(dig)
   if (!t) return null
+  if (t[2] === '0') return null
   // 55 + DDD + 8 dígitos começando em 6-9 é celular sem o 9.
   if (t.length === 12 && /[6-9]/.test(t[4]!)) return `${t.slice(0, 4)}9${t.slice(4)}`
   return t
 }
 
-/** "+55 83 99999-0001" */
+/**
+ * Chave de comparação de telefones de qualquer país.
+ * Brasileiro (55 + 12/13 dígitos, ou digitado localmente com 10/11) vira a forma canônica;
+ * já internacional (8 a 15 dígitos) fica como veio — o JID sempre traz o código do país,
+ * então não há o que canonicalizar. O resto é null.
+ */
+export function chaveTelefone(texto: string | null | undefined): string | null {
+  if (!texto) return null
+  let dig = texto.replace(/\D/g, '')
+  if (dig.length > 0 && dig[0] === '0') dig = dig.slice(1)
+  if ((dig.startsWith('55') && (dig.length === 12 || dig.length === 13)) || dig.length === 10 || dig.length === 11) {
+    return telefoneCanonico(texto)
+  }
+  if (dig.length >= 8 && dig.length <= 15) return dig
+  return null
+}
+
+/** "+55 83 99999-0001"; números não brasileiros caem no formato genérico "+<dígitos>". */
 export function formatarTelefone(t: string): string {
   const m = /^55(\d{2})(\d{4,5})(\d{4})$/.exec(t)
   return m ? `+55 ${m[1]} ${m[2]}-${m[3]}` : `+${t}`
@@ -26,19 +47,31 @@ export function usuarioDoJid(jid: string): string {
   return jid.split('@')[0]!.split(':')[0]!
 }
 
-/** Pessoa a partir de um JID solto (menção, mensagem citada). */
+/**
+ * Pessoa a partir de um JID solto (menção, mensagem citada).
+ * O JID sempre traz o código do país: só canonicaliza (regra do 9 brasileiro) quando ele é
+ * o 55 do Brasil; para outros países guarda os dígitos exatamente como vieram, identificáveis
+ * mas sem essa lógica — sem isso um celular dos EUA (55155...) virava um número brasileiro inventado.
+ */
 export function pessoaDoJid(jid: string): Pessoa {
   const usuario = usuarioDoJid(jid)
+  const telefone = jid.endsWith('@s.whatsapp.net')
+    ? /^55\d{10,11}$/.test(usuario)
+      ? telefoneCanonico(usuario)
+      : /^\d{8,15}$/.test(usuario)
+        ? usuario
+        : null
+    : null
   return {
     jid,
-    telefone: jid.endsWith('@s.whatsapp.net') ? telefoneCanonico(usuario) : null,
+    telefone,
     lid: jid.endsWith('@lid') ? `${usuario}@lid` : null
   }
 }
 
 /** Acha no cadastro: pelo telefone, senão pelo LID. */
 export function acharFuncionario(funcionarios: Funcionario[], p: Pessoa): Funcionario | null {
-  const tel = telefoneCanonico(p.telefone)
+  const tel = chaveTelefone(p.telefone)
   return (tel ? funcionarios.find((f) => f.telefone === tel) : undefined) ?? (p.lid ? funcionarios.find((f) => f.lid === p.lid) : undefined) ?? null
 }
 
@@ -48,7 +81,7 @@ export function vinculosDeLid(funcionarios: Funcionario[], pessoas: Pessoa[]): {
   const ligados = new Set<number>()
   const vinculos: { id: number; lid: string }[] = []
   for (const p of pessoas) {
-    const tel = telefoneCanonico(p.telefone)
+    const tel = chaveTelefone(p.telefone)
     if (!tel || !p.lid || lidsUsados.has(p.lid)) continue
     const f = funcionarios.find((x) => x.telefone === tel)
     if (!f || f.lid || ligados.has(f.id)) continue
