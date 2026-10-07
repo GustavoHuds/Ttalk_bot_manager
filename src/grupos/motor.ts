@@ -1,7 +1,7 @@
 import { semAcento } from '../conversa/textos.js'
 import type { DadosFuncionario, Funcionario } from '../db/grupos.js'
 import { COMANDOS, acharComando, type Comando, type DefComando } from './comandos.js'
-import { acharFuncionario, formatarTelefone, telefoneCanonico, usuarioDoJid } from './pessoas.js'
+import { acharFuncionario, chaveTelefone, formatarTelefone, telefoneCanonico, usuarioDoJid } from './pessoas.js'
 import type { AcaoGrupo, ContextoGrupos, Pessoa } from './tipos.js'
 
 /** Listas longas no WhatsApp ficam ilegíveis: corta e diz quantos faltaram. */
@@ -31,10 +31,16 @@ function descrever(f: Funcionario): string {
   return `${f.nome} — ${onde}${f.ativo ? '' : ' (inativo)'}`
 }
 
-/** "/cadastrar 5583999990001 Nome | ..." no privado: o primeiro termo é o telefone. */
+/**
+ * "/cadastrar 5583999990001 Nome | ..." no privado: o primeiro termo é o telefone.
+ * Com "+" e não "+55": número estrangeiro digitado — mantém os dígitos como vieram
+ * (telefoneCanonico assumiria DDD brasileiro e inventaria um número errado).
+ */
 function separarTelefone(texto: string): { pessoa: Pessoa | null; resto: string } {
   const [primeiro = '', ...resto] = texto.split(' ')
-  const tel = /^\+?[\d().-]{10,}$/.test(primeiro) ? telefoneCanonico(primeiro) : null
+  if (!/^\+?[\d().-]{10,}$/.test(primeiro)) return { pessoa: null, resto: texto }
+  const estrangeiro = primeiro.startsWith('+') && !primeiro.startsWith('+55')
+  const tel = estrangeiro ? primeiro.replace(/\D/g, '') : telefoneCanonico(primeiro)
   if (!tel) return { pessoa: null, resto: texto }
   return { pessoa: { jid: `${tel}@s.whatsapp.net`, telefone: tel, lid: null }, resto: resto.join(' ') }
 }
@@ -150,10 +156,13 @@ class Execucao {
     if (!pessoa) return this.uso()
     const [nome = '', setor = '', loja = '', cargo = ''] = resto.split('|').map((c) => c.trim())
     const letras = nome.match(/\p{L}/gu)?.length ?? 0
-    const valido = letras >= 2 && nome.length <= 80 && !!setor && !!loja && [setor, loja, cargo].every((c) => c.length <= 60)
+    // Sem dígitos: evita que um telefone digitado (sem @menção, com citada como alvo) seja engolido pelo campo nome.
+    const valido = letras >= 2 && !/\d/.test(nome) && nome.length <= 80 && !!setor && !!loja && [setor, loja, cargo].every((c) => c.length <= 60)
     if (!valido) return this.uso()
 
-    const telefone = telefoneCanonico(pessoa.telefone)
+    // pessoa.telefone já chega como chave (o orquestrador resolve o JID): não canonicalizar de novo,
+    // senão um número estrangeiro é tratado como brasileiro sem o 55 e sai errado.
+    const telefone = chaveTelefone(pessoa.telefone)
     if (!telefone && !pessoa.lid) return responder('Não consegui identificar essa pessoa. Mencione com @ ou informe o telefone.')
     const porTelefone = telefone ? this.ctx.funcionarios.find((f) => f.telefone === telefone) : undefined
     const porLid = pessoa.lid ? this.ctx.funcionarios.find((f) => f.lid === pessoa.lid) : undefined
@@ -161,6 +170,8 @@ class Execucao {
       return responder('Esse telefone e esse contato estão em cadastros diferentes. Corrija pela página Equipe do painel.')
     }
     const atual = porTelefone ?? porLid ?? null
+    // Reativar por /cadastrar devolveria o poder de gestor em silêncio: exige o painel, onde isso fica visível.
+    if (atual && !atual.ativo) return responder(`${atual.nome} está com o cadastro inativo. Reative pelo painel.`)
     const dados: DadosFuncionario = {
       nome,
       telefone: telefone ?? atual?.telefone ?? null,
@@ -200,7 +211,10 @@ class Execucao {
       ]
     }
     if (!ja) return responder(`${f.nome} não é gestor(a).`)
-    if (this.gestoresAtivos().length <= 1) return responder('Não dá para remover o último gestor. Adicione outro antes ou use o painel.')
+    // Alvo inativo não conta como "o último gestor": inativo já não tem poder de gestor de qualquer forma.
+    if (f.ativo && this.gestoresAtivos().length <= 1) {
+      return responder('Não dá para remover o último gestor. Adicione outro antes ou use o painel.')
+    }
     return [
       { tipo: 'gestor', funcionarioId: f.id, ativo: false },
       { tipo: 'auditar', acao: 'gestor_removido', detalhe: f.nome },
@@ -258,10 +272,13 @@ class Execucao {
   }
 
   private log(): AcaoGrupo[] {
-    const n = Math.min(30, Math.max(1, Number.parseInt(this.cmd.args, 10) || 10))
+    // Só cai para o padrão (10) quando não vem número; "/log 0" é 0, não "nenhum número" — vira 1, não 10.
+    const pedido = this.cmd.args.trim() === '' ? NaN : Number.parseInt(this.cmd.args, 10)
+    const n = Math.min(30, Math.max(1, Number.isNaN(pedido) ? 10 : pedido))
     const linhas = this.ctx.auditoria
       .slice(0, n)
       .map((l) => `${horaBR(l.em)} · ${l.usuario} · ${l.acao}${l.detalhe ? ` · ${l.detalhe}` : ''}`)
+      .map((l) => (l.length > 200 ? l.slice(0, 200) : l))
     if (linhas.length === 0) return responder('Nada registrado ainda.')
     return responder(`📜 Últimas ações\n${linhas.join('\n')}`)
   }

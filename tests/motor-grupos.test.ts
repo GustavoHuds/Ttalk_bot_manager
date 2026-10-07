@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Funcionario, Grupo } from '../src/db/grupos.js'
 import { interpretar } from '../src/grupos/comandos.js'
 import { processarComando } from '../src/grupos/motor.js'
+import { chaveTelefone } from '../src/grupos/pessoas.js'
 import type { AcaoGrupo, ContextoGrupos, MembroGrupo, Pessoa } from '../src/grupos/tipos.js'
 import { AGORA } from './ajuda.js'
 
@@ -20,6 +21,8 @@ const GRUPO: Grupo = {
 const ANA_LID: Pessoa = { jid: '111@lid', telefone: null, lid: '111@lid' }
 const BETO_TEL: Pessoa = { jid: '5583999990002@s.whatsapp.net', telefone: '5583999990002', lid: null }
 const ESTRANHO: Pessoa = { jid: '999@lid', telefone: null, lid: '999@lid' }
+/** Número dos EUA: o JID já traz o telefone como chave pronta (sem o 55 do Brasil), pessoaDoJid não o canonicaliza. */
+const AMERICANO: Pessoa = { jid: '14155550100@s.whatsapp.net', telefone: '14155550100', lid: null }
 const membro = (p: Pessoa): MembroGrupo => ({ ...p, admin: false })
 
 function ctx(extra: Partial<ContextoGrupos> = {}): ContextoGrupos {
@@ -149,5 +152,75 @@ describe('motor do bot de grupos: comandos', () => {
     const auditoria = Array.from({ length: 40 }, (_, i) => ({ em: AGORA - i, usuario: 'rh', acao: `a${i}`, detalhe: null }))
     expect(textos(rodar(privado({ auditoria }), '/log 99'))[0]!.split('\n')).toHaveLength(31)
     expect(textos(rodar(privado({ auditoria }), '/log'))[0]!.split('\n')).toHaveLength(11)
+  })
+})
+
+describe('motor do bot de grupos: correções de revisão', () => {
+  it('/cadastrar não reativa quem está inativo (perderia e recuperaria poder de gestor em silêncio)', () => {
+    const inativo: Funcionario = { ...BETO, ativo: false }
+    const acoes = rodar(ctx({ funcionarios: [ANA, inativo], mencionados: [BETO_TEL] }), '/cadastrar @5583999990002 Beto Lima | Caixa | Sul')
+    expect(textos(acoes)).toEqual(['Beto Lima está com o cadastro inativo. Reative pelo painel.'])
+    expect(acoes.some((a) => a.tipo === 'salvar_funcionario')).toBe(false)
+  })
+
+  it('/gestor remover: a proteção do último gestor só vale se o alvo estiver ativo', () => {
+    const betoInativo: Funcionario = { ...BETO, ativo: false }
+    // Ana (ativa, gestora) remove Beto, que é gestor mas está inativo: ele não conta como "o último gestor ativo".
+    const acoes = rodar(
+      ctx({ funcionarios: [ANA, betoInativo], gestores: new Set([1, 2]), mencionados: [BETO_TEL] }),
+      '/gestor remover @5583999990002'
+    )
+    expect(acoes[0]).toEqual({ tipo: 'gestor', funcionarioId: 2, ativo: false })
+  })
+
+  it('/cadastrar recusa nome com dígitos (telefone digitado não pode virar nome quando o alvo é a mensagem citada)', () => {
+    const t = textos(rodar(ctx({ citada: BETO_TEL }), '/cadastrar 83999990002 Nome | Estoque | Norte'))[0]
+    expect(t).toMatch(/^Uso:/)
+  })
+
+  it('/log 0 vira 1 (só cai para 10 quando não vem número); cada linha é cortada em 200 caracteres', () => {
+    const longa = 'x'.repeat(300)
+    const auditoria = [
+      { em: AGORA, usuario: 'rh', acao: longa, detalhe: null },
+      { em: AGORA - 1, usuario: 'rh', acao: 'a2', detalhe: null }
+    ]
+    const comZero = textos(rodar(privado({ auditoria }), '/log 0'))[0]!.split('\n')
+    expect(comZero).toHaveLength(2)
+    expect(comZero[1]!.length).toBeLessThanOrEqual(200)
+  })
+
+  it('/grupos: quem não é gestor não recebe nada, mesmo dentro do grupo', () => {
+    expect(rodar(ctx({ remetente: BETO_TEL }), '/grupos')).toEqual([])
+  })
+
+  it('/desconhecidos corta a lista em 40 e diz quantos faltaram', () => {
+    const estranhos = Array.from({ length: 45 }, (_, i) => membro({ jid: `${i}@lid`, telefone: null, lid: `${i}@lid` }))
+    const t = textos(rodar(ctx({ membros: [membro(ANA_LID), ...estranhos] }), '/desconhecidos'))[0]!
+    expect(t).toContain('45 sem cadastro')
+    expect(t).toContain('… e mais 5')
+  })
+
+  it('/cadastrar e /quem usam a mesma chave para telefone estrangeiro (Pessoa.telefone já é a chave; não canonicaliza de novo como brasileiro)', () => {
+    const cadastro = rodar(ctx({ mencionados: [AMERICANO] }), '/cadastrar @14155550100 Carlos Externo | TI | Remoto')
+    const salvar = cadastro.find((a) => a.tipo === 'salvar_funcionario')
+    if (salvar?.tipo !== 'salvar_funcionario') throw new Error('esperava salvar_funcionario')
+    expect(salvar.dados.telefone).toBe(chaveTelefone('14155550100'))
+
+    const carlos: Funcionario = {
+      id: 9, nome: 'Carlos Externo', telefone: salvar.dados.telefone, lid: null,
+      setor: 'TI', loja: 'Remoto', cargo: null, nascimento: null, ativo: true
+    }
+    const quem = textos(rodar(ctx({ funcionarios: [ANA, BETO, carlos], mencionados: [AMERICANO] }), '/quem @14155550100'))
+    expect(quem[0]).toContain('Carlos Externo')
+  })
+
+  it('/cadastrar no privado: telefone estrangeiro digitado com "+" (não +55) mantém os dígitos crus', () => {
+    const acoes = rodar(privado(), '/cadastrar +14155550100 Carlos Externo | TI | Remoto')
+    expect(acoes[0]).toMatchObject({ tipo: 'salvar_funcionario', dados: { telefone: '14155550100' } })
+  })
+
+  it('/cadastrar no privado: telefone brasileiro digitado com "+55" ainda canonicaliza', () => {
+    const acoes = rodar(privado(), '/cadastrar +5583999990009 Diana Reis | Caixa | Sul')
+    expect(acoes[0]).toMatchObject({ tipo: 'salvar_funcionario', dados: { telefone: '5583999990009' } })
   })
 })
