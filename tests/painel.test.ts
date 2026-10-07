@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { ArmazemArquivos } from '../src/arquivos.js'
 import { FonteBots, botModelo } from '../src/config/bots.js'
 import { abrirBanco } from '../src/db/banco.js'
+import type { Numero } from '../src/db/numeros.js'
 import { RepoNumeros } from '../src/db/numeros.js'
 import { Repositorio } from '../src/db/repositorio.js'
 import { hashSenha } from '../src/painel/auth.js'
@@ -24,15 +25,18 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
     AGORA
   )
   const bots = new FonteBots(repo, padrao)
+  const estados = new Map<number, EstadoConexao>([[1, { status: 'conectado', qr: null, desde: AGORA, numero: '5583900001111', motivo: null }]])
   const app = await criarPainel({
     repo,
-    bots,
     numeros: new RepoNumeros(repo.db),
+    bots,
     relogio: () => AGORA,
     armazem,
-    conexao: {
-      estado: () => ({ status: 'conectado', qr: null, desde: AGORA, numero: '5583900001111', motivo: null }),
-      novaSessao: async () => {}
+    conexoes: {
+      estado: (id) => estados.get(id) ?? null,
+      novaSessao: async () => {},
+      ativar: async (n: Numero) => void estados.set(n.id, { status: 'aguardando_qr', qr: 'QR-TESTE', desde: AGORA, numero: null, motivo: null }),
+      desativar: async (id) => void estados.delete(id)
     },
     usuarios: new Map([['rh', hashSenha('senha-bem-longa')]]),
     segredo: 'x'.repeat(40),
@@ -40,7 +44,12 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
     backupAtivo: false,
     alertaAtivo: false
   })
-  return { app, bots }
+  return { app, bots, estados }
+}
+
+async function login(app: FastifyInstance): Promise<string> {
+  const r = await app.inject({ method: 'POST', url: '/login', payload: 'usuario=rh&senha=senha-bem-longa', headers: form })
+  return `sessao=${r.cookies.find((x) => x.name === 'sessao')!.value}`
 }
 
 describe('painel', () => {
@@ -48,7 +57,6 @@ describe('painel', () => {
   let repo: Repositorio
   let armazem: ArmazemArquivos
   let idArquivo: number
-  const estado: EstadoConexao = { status: 'conectado', qr: null, desde: AGORA, numero: '5583900001111', motivo: null }
 
   beforeEach(async () => {
     repo = new Repositorio(abrirBanco(':memory:'))
@@ -261,6 +269,56 @@ describe('editor de bots', () => {
     expect(form.body).toContain('<option value="1" selected>Principal</option>')
     const salvo = JSON.parse(repo.bot('CAIXA-NOV26')!)
     expect((await salvar(salvo, 'aberto', 'CAIXA-NOV26')).statusCode).toBe(303)
+  })
+})
+
+describe('números', () => {
+  let app: FastifyInstance
+  let repo: Repositorio
+  let cookie: string
+
+  beforeEach(async () => {
+    repo = new Repositorio(abrirBanco(':memory:'))
+    ;({ app } = await painelComBot(repo, new ArmazemArquivos(pastaTemp())))
+    cookie = await login(app)
+  })
+
+  it('adicionar número mostra o QR e é auditado; /healthz só fica ok com todos os ativos conectados', async () => {
+    expect((await app.inject('/healthz')).statusCode).toBe(200)
+    const r = await app.inject({ method: 'POST', url: '/numeros', headers: { ...form, cookie }, payload: 'nome=Avisos&papel=grupos' })
+    expect(r.statusCode).toBe(303)
+    expect(r.headers.location).toBe('/numeros/2')
+    expect((await app.inject({ url: '/numeros/2', headers: { cookie } })).body).toContain('data:image/png;base64')
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ usuario: 'rh', acao: 'criar_numero' })
+    const h = await app.inject('/healthz')
+    expect(h.statusCode).toBe(503)
+    expect(h.json()).toEqual({ ok: false })
+    expect((await app.inject({ method: 'POST', url: '/numeros/2/desativar', headers: { cookie } })).statusCode).toBe(303)
+    expect(new RepoNumeros(repo.db).numero(2)!.ativo).toBe(false)
+    expect((await app.inject('/healthz')).statusCode).toBe(200)
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'desativar_numero' })
+  })
+
+  it('nome vazio ou uso desconhecido é recusado', async () => {
+    const r = await app.inject({ method: 'POST', url: '/numeros', headers: { ...form, cookie }, payload: 'nome=&papel=grupos' })
+    expect(r.statusCode).toBe(400)
+    expect((await app.inject({ method: 'POST', url: '/numeros', headers: { ...form, cookie }, payload: 'nome=X&papel=vendas' })).statusCode).toBe(400)
+    expect(new RepoNumeros(repo.db).listar()).toHaveLength(1)
+  })
+
+  it('/conexao leva para /numeros; /numeros e /saude mostram cada número', async () => {
+    new RepoNumeros(repo.db).criar('Avisos', 'grupos', AGORA)
+    expect((await app.inject({ url: '/conexao', headers: { cookie } })).headers.location).toBe('/numeros')
+    const lista = await app.inject({ url: '/numeros', headers: { cookie } })
+    expect(lista.body).toContain('Principal')
+    expect(lista.body).toContain('Avisos')
+    const saude = await app.inject({ url: '/saude', headers: { cookie } })
+    expect(saude.body).toContain('Principal')
+    expect(saude.body).toContain('Avisos')
+  })
+
+  it('/numeros sem cookie redireciona para /login', async () => {
+    expect((await app.inject('/numeros')).headers.location).toBe('/login')
   })
 })
 

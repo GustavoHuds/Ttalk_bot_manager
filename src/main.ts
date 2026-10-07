@@ -102,7 +102,13 @@ const painel = await criarPainel({
   bots: config,
   numeros: new RepoNumeros(db),
   armazem,
-  conexao: { estado: () => conexao.estadoAtual, novaSessao: () => conexao.novaSessao() },
+  // Ainda um número só até a Tarefa 14 ligar o GerenciadorConexoes de fato.
+  conexoes: {
+    estado: (id) => (id === 1 ? conexao.estadoAtual : null),
+    novaSessao: () => conexao.novaSessao(),
+    ativar: async () => {},
+    desativar: async () => {}
+  },
   usuarios: amb.painelUsuarios,
   segredo: amb.painelSegredo,
   cookieSeguro: amb.cookieSeguro,
