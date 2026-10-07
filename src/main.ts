@@ -7,6 +7,7 @@ import { FonteBots } from './config/bots.js'
 import { lerPadrao, lerYamlProcessos } from './config/carregar.js'
 import { Orquestrador } from './conversa/orquestrador.js'
 import { abrirBanco } from './db/banco.js'
+import { RepoGrupos } from './db/grupos.js'
 import { RepoNumeros } from './db/numeros.js'
 import { Repositorio } from './db/repositorio.js'
 import { criarPainel } from './painel/servidor.js'
@@ -101,6 +102,7 @@ const painel = await criarPainel({
   repo,
   bots: config,
   numeros: new RepoNumeros(db),
+  grupos: new RepoGrupos(db),
   armazem,
   // Ainda um número só até a Tarefa 14 ligar o GerenciadorConexoes de fato.
   conexoes: {

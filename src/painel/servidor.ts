@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import type { ArmazemArquivos } from '../arquivos.js'
 import { botModelo, paraEditor, prepararBot, type FonteBots } from '../config/bots.js'
 import type { StatusProcesso } from '../config/tipos.js'
+import type { RepoGrupos } from '../db/grupos.js'
 import type { Numero, RepoNumeros } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
 import type { EstadoConexao } from '../whatsapp/baileys.js'
@@ -12,6 +13,7 @@ import { LimiteLogin, senhaConfere } from './auth.js'
 import { paginaEditorBot } from './editor.js'
 import { gerarZip } from './exportar.js'
 import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude } from './paginas.js'
+import { rotasEquipe } from './rotas-equipe.js'
 import { rotasNumeros } from './rotas-numeros.js'
 
 /** O que o painel controla nas conexões (o GerenciadorConexoes, em produção). */
@@ -26,6 +28,7 @@ export interface DependenciasPainel {
   repo: Repositorio
   bots: FonteBots
   numeros: RepoNumeros
+  grupos: RepoGrupos
   armazem: ArmazemArquivos
   conexoes: ControleConexoes
   usuarios: Map<string, string>
@@ -277,6 +280,7 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
   app.get('/auditoria', async (req, rep) => html(rep, paginaAuditoria(d.repo.auditoriaRecente(200), usuario(req))))
 
   rotasNumeros(app, d, { html, usuario, agora })
+  rotasEquipe(app, d, { html, usuario, agora })
 
   return app
 }

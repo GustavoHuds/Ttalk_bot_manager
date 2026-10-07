@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { ArmazemArquivos } from '../src/arquivos.js'
 import { FonteBots, botModelo } from '../src/config/bots.js'
 import { abrirBanco } from '../src/db/banco.js'
+import { RepoGrupos } from '../src/db/grupos.js'
 import type { Numero } from '../src/db/numeros.js'
 import { RepoNumeros } from '../src/db/numeros.js'
 import { Repositorio } from '../src/db/repositorio.js'
@@ -29,6 +30,7 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos) {
   const app = await criarPainel({
     repo,
     numeros: new RepoNumeros(repo.db),
+    grupos: new RepoGrupos(repo.db),
     bots,
     relogio: () => AGORA,
     armazem,
@@ -335,5 +337,80 @@ describe('exportação', () => {
 
   it('link de divulgação leva o código no texto', () => {
     expect(linkWaMe('5583900001111', 'X-1')).toBe('https://wa.me/5583900001111?text=Quero%20me%20candidatar%20%5BX-1%5D')
+  })
+})
+
+describe('grupos e equipe', () => {
+  let app: FastifyInstance
+  let repo: Repositorio
+  let grupos: RepoGrupos
+  let cookie: string
+  const post = (url: string, payload: Record<string, string>) =>
+    app.inject({ method: 'POST', url, headers: { ...form, cookie }, payload: new URLSearchParams(payload).toString() })
+
+  beforeEach(async () => {
+    repo = new Repositorio(abrirBanco(':memory:'))
+    ;({ app } = await painelComBot(repo, new ArmazemArquivos(pastaTemp())))
+    new RepoNumeros(repo.db).criar('Avisos', 'grupos', AGORA)
+    grupos = new RepoGrupos(repo.db)
+    grupos.salvarGrupo(2, '120363-1@g.us', 'Loja Centro', false, AGORA)
+    cookie = await login(app)
+  })
+
+  it('/grupos lista por número e grava setor e loja com auditoria', async () => {
+    expect((await app.inject({ url: '/grupos', headers: { cookie } })).body).toContain('Loja Centro')
+    const r = await post('/grupos/etiquetar', { numero_id: '2', jid: '120363-1@g.us', setor: 'Vendas', loja: 'Centro' })
+    expect(r.statusCode).toBe(303)
+    expect(grupos.grupo(2, '120363-1@g.us')).toMatchObject({ setor: 'Vendas', loja: 'Centro' })
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ usuario: 'rh', acao: 'etiquetar_grupo' })
+    expect((await post('/grupos/etiquetar', { numero_id: '2', jid: 'nao@g.us', setor: '', loja: '' })).statusCode).toBe(404)
+  })
+
+  it('cadastro pelo painel: telefone normalizado, repetido recusado, gestor e exclusão auditados', async () => {
+    expect((await post('/equipe/salvar', { nome: 'Ana Souza', telefone: '(83) 99999-0001', setor: 'Vendas', loja: 'Centro', ativo: '1' })).statusCode).toBe(303)
+    const ana = grupos.porTelefone('5583999990001')!
+    expect(ana).toMatchObject({ nome: 'Ana Souza', ativo: true })
+    const repetido = await post('/equipe/salvar', { nome: 'Outra Pessoa', telefone: '83999990001', ativo: '1' })
+    expect(repetido.statusCode).toBe(400)
+    expect(repetido.body).toContain('já é de Ana Souza')
+    expect((await post(`/equipe/${ana.id}/gestor`, { ativo: '1' })).statusCode).toBe(303)
+    expect(grupos.gestores()).toEqual([ana.id])
+    expect((await app.inject({ url: '/equipe?q=souza', headers: { cookie } })).body).toContain('👔 gestor')
+    expect((await post(`/equipe/${ana.id}/excluir`, {})).statusCode).toBe(303)
+    expect(grupos.funcionarios()).toEqual([])
+    expect(repo.auditoriaRecente(4).map((l) => l.acao)).toEqual(['excluir_funcionario', 'gestor_adicionado', 'criar_funcionario', 'login'])
+  })
+
+  it('importação CSV: prévia com erro por linha, confirma só as válidas e atualiza quem já existe', async () => {
+    const id = grupos.salvarFuncionario(
+      null,
+      { nome: 'Ana', telefone: '5583999990001', lid: '111@lid', setor: null, loja: null, cargo: null, nascimento: null, ativo: true },
+      AGORA
+    )
+    const csv = 'Ana Souza;83999990001;Vendas;Centro;;\nBeto Lima;83999990002;Caixa;Sul;;\nX;1;;;;'
+    const previa = await post('/equipe/importar', { csv })
+    expect(previa.statusCode).toBe(200)
+    expect(previa.body).toContain('atualiza')
+    expect(previa.body).toContain('novo')
+    expect(previa.body).toContain('nome é obrigatório')
+    expect(grupos.funcionarios()).toHaveLength(1)
+    const r = await post('/equipe/importar', { csv, confirmar: '1' })
+    expect(r.headers.location).toBe('/equipe?importados=2')
+    expect(grupos.funcionario(id)).toMatchObject({ nome: 'Ana Souza', setor: 'Vendas', lid: '111@lid' })
+    expect(grupos.porTelefone('5583999990002')).toMatchObject({ nome: 'Beto Lima' })
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'importar_equipe', detalhe: '2 pessoas (1 linhas com erro)' })
+  })
+
+  it('exportação da equipe vem com BOM e neutraliza fórmulas', async () => {
+    grupos.salvarFuncionario(
+      null,
+      { nome: '=HYPERLINK("x")', telefone: '5583999990001', lid: null, setor: null, loja: null, cargo: null, nascimento: null, ativo: true },
+      AGORA
+    )
+    const r = await app.inject({ url: '/equipe/exportar', headers: { cookie } })
+    expect(r.headers['content-type']).toContain('text/csv')
+    expect(r.body.startsWith('﻿"nome";"telefone"')).toBe(true)
+    expect(r.body).toContain(`"'=HYPERLINK(""x"")"`)
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'exportar_equipe' })
   })
 })

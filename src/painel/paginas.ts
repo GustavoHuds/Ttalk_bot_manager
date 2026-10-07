@@ -29,7 +29,7 @@ dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}dt{c
 
 export function layout(titulo: string, corpo: string, usuario: string | null, extraHead = ''): string {
   const nav = usuario
-    ? `<a href="/">Bots</a><a href="/numeros">Números</a><a href="/saude">Saúde</a><a href="/auditoria">Auditoria</a>
+    ? `<a href="/">Bots</a><a href="/numeros">Números</a><a href="/grupos">Grupos</a><a href="/equipe">Equipe</a><a href="/saude">Saúde</a><a href="/auditoria">Auditoria</a>
        <form method="post" action="/sair" style="margin:0"><button>Sair (${esc(usuario)})</button></form>`
     : ''
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
