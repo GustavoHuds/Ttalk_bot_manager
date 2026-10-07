@@ -434,6 +434,11 @@ export class Repositorio {
     return r?.dados ?? null
   }
 
+  numeroDoBot(codigo: string): number | null {
+    const r = this.db.prepare(`SELECT numero_id AS numeroId FROM processos WHERE codigo = ?`).get(codigo) as { numeroId: number } | undefined
+    return r?.numeroId ?? null
+  }
+
   salvarBot(codigo: string, dados: string, numeroId: number, usuario: string, agora: number): void {
     this.db
       .prepare(

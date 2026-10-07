@@ -33,6 +33,11 @@ describe('migrações', () => {
     }
     expect(db.prepare('SELECT candidatura_id, ultima_recebida FROM conversas').get()).toEqual({ candidatura_id: 7, ultima_recebida: 5 })
     expect(db.prepare('SELECT status, payload FROM mensagens_processadas').get()).toEqual({ status: 'pendente', payload: '{}' })
+    expect(
+      db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'mensagens_pendentes'`).get()
+    ).toBeDefined()
+    db.exec('DELETE FROM candidaturas WHERE id = 7')
+    expect(db.prepare(`SELECT candidatura_id FROM conversas WHERE jid = 'a@s.whatsapp.net'`).get()).toEqual({ candidatura_id: null })
   })
 
   it('a mesma pessoa conversa com dois números e o mesmo ID de mensagem chega aos dois', () => {

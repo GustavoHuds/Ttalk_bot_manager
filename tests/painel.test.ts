@@ -240,6 +240,28 @@ describe('editor de bots', () => {
     expect(form.body).toContain(`<option value="${sul.id}" selected>Loja Sul</option>`)
     expect(form.body).not.toContain('Avisos')
   })
+
+  it('número de bot com candidaturas não muda', async () => {
+    await salvar(novo(), 'aberto')
+    repo.criarCandidatura(1, 'CAIXA-NOV26', 'x@s.whatsapp.net', null, null, AGORA)
+    const sul = new RepoNumeros(repo.db).criar('Loja Sul', 'recrutamento', AGORA)
+    const salvo = JSON.parse(repo.bot('CAIXA-NOV26')!)
+    const r = await salvar({ ...salvo, numero_id: sul.id }, 'aberto', 'CAIXA-NOV26')
+    expect(r.statusCode).toBe(400)
+    expect(r.body).toContain('número de um bot com candidaturas não pode mudar')
+    expect(bots.get().processos[0]!.numeroId).toBe(1)
+  })
+
+  it('editor só oferece números ativos, mas aceita o número atual do bot mesmo desativado', async () => {
+    await salvar(novo(), 'aberto')
+    new RepoNumeros(repo.db).definirAtivo(1, false)
+    const paraNovo = await app.inject({ url: '/bots/novo', headers: { cookie } })
+    expect(paraNovo.body).not.toContain('Principal')
+    const form = await app.inject({ url: '/bots/CAIXA-NOV26', headers: { cookie } })
+    expect(form.body).toContain('<option value="1" selected>Principal</option>')
+    const salvo = JSON.parse(repo.bot('CAIXA-NOV26')!)
+    expect((await salvar(salvo, 'aberto', 'CAIXA-NOV26')).statusCode).toBe(303)
+  })
 })
 
 describe('exportação', () => {

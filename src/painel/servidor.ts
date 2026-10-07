@@ -118,7 +118,14 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
   // --- bots ---------------------------------------------------------------------------
 
   const hoje = () => new Date(agora() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const numerosRecrutamento = () => d.numeros.listar().filter((n) => n.papel === 'recrutamento')
+  // Só números ativos entram na lista; o número atual do bot (editando) continua oferecido mesmo desativado.
+  const numerosRecrutamento = (incluirId: number | null = null) => {
+    const todos = d.numeros.listar().filter((n) => n.papel === 'recrutamento')
+    const ativos = todos.filter((n) => n.ativo)
+    if (incluirId === null || ativos.some((n) => n.id === incluirId)) return ativos
+    const atual = todos.find((n) => n.id === incluirId)
+    return atual ? [...ativos, atual] : ativos
+  }
   const editor = (
     rep: FastifyReply,
     req: FastifyRequest,
@@ -126,7 +133,12 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
   ) =>
     html(
       rep,
-      paginaEditorBot({ ...o, padrao: d.bots.padrao, usuario: usuario(req), numeros: numerosRecrutamento().map(({ id, nome }) => ({ id, nome })) })
+      paginaEditorBot({
+        ...o,
+        padrao: d.bots.padrao,
+        usuario: usuario(req),
+        numeros: numerosRecrutamento(o.original !== null ? o.dados.numero_id : null).map(({ id, nome }) => ({ id, nome }))
+      })
     )
 
   app.get<{ Querystring: { de?: string } }>('/bots/novo', async (req, rep) => {
@@ -155,11 +167,15 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
       return rep.code(400).send('Formulário inválido')
     }
     try {
-      const { dados } = prepararBot(entrada, d.bots.padrao, status, numerosRecrutamento().map((n) => n.id))
+      const numeroAtual = original ? d.repo.numeroDoBot(original) : null
+      const { dados } = prepararBot(entrada, d.bots.padrao, status, numerosRecrutamento(numeroAtual).map((n) => n.id))
       if (original && dados.codigo !== original) throw new Error('o código de um bot existente não pode mudar')
       if (original && !d.repo.bot(original)) throw new Error('bot não encontrado')
       if (!original && (d.repo.bot(dados.codigo) || d.repo.contarCandidaturas(dados.codigo) > 0)) {
         throw new Error(`o código ${dados.codigo} já foi usado; escolha outro`)
+      }
+      if (original && numeroAtual !== null && numeroAtual !== dados.numero_id && d.repo.contarCandidaturas(original) > 0) {
+        throw new Error('o número de um bot com candidaturas não pode mudar')
       }
       d.repo.transacao(() => {
         d.repo.salvarBot(dados.codigo, JSON.stringify(dados), dados.numero_id, usuario(req), agora())
