@@ -108,9 +108,14 @@ describe('pessoas', () => {
     expect(pessoaDoJid('14155550123@s.whatsapp.net').telefone).toBe('14155550123')
     // Número de 12 dígitos que não é brasileiro (código 52, México): fica com os dígitos como vieram.
     expect(pessoaDoJid('521771234567@s.whatsapp.net').telefone).toBe('521771234567')
-    // chaveTelefone trata 10/11 dígitos como número brasileiro digitado localmente (regra combinada);
-    // por isso a comparação é feita com números de outro tamanho (12+), como no teste abaixo.
     expect(chaveTelefone('521771234567')).toBe('521771234567')
+  })
+
+  it('chaveTelefone só trata 11 dígitos como celular brasileiro (DDD 11-99 + 9 na terceira posição)', () => {
+    // Celular brasileiro: DDD 83 + 9 (prefixo de celular) + 8 dígitos.
+    expect(chaveTelefone('83999990001')).toBe('5583999990001')
+    // Celular dos EUA: 11 dígitos também, mas a terceira posição é '1', não '9' — não é um DDD+9 válido.
+    expect(chaveTelefone('14155550123')).toBe('14155550123')
   })
 
   it('acha no cadastro pelo telefone, senão pelo LID; telefone tem prioridade sobre LID', () => {
@@ -125,6 +130,12 @@ describe('pessoas', () => {
   it('acha no cadastro um telefone estrangeiro', () => {
     const lista = [f(1, '521771234567', null)]
     expect(acharFuncionario(lista, { jid: 'x', telefone: '521771234567', lid: null })!.id).toBe(1)
+  })
+
+  it('acha no cadastro um funcionário dos EUA (11 dígitos) a partir da pessoa do JID', () => {
+    const lista = [f(1, '14155550123', null)]
+    const pessoa = pessoaDoJid('14155550123@s.whatsapp.net')
+    expect(acharFuncionario(lista, pessoa)!.id).toBe(1)
   })
 
   it('LID novo só é ligado a quem tem o telefone e ainda não tem LID', () => {

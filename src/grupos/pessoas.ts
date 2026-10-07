@@ -2,15 +2,21 @@ import { normalizarTelefone } from '../conversa/motor.js'
 import type { Funcionario } from '../db/grupos.js'
 import type { Pessoa } from './tipos.js'
 
+/** Celular brasileiro digitado localmente: DDD (11-99, sem zero em nenhuma posição) + 9 + 8 dígitos. */
+const CELULAR_LOCAL = /^[1-9][1-9]9\d{8}$/
+
 /**
  * Forma única de guardar e comparar telefones brasileiros: 55 + DDD + número, com o 9 dos celulares.
  * O WhatsApp ainda entrega alguns celulares antigos com 8 dígitos (55 83 9999-0001); aqui o 9 volta.
  * Um zero de discagem na frente do DDD ("083...") é descartado; DDD não existe começando em 0, então é rejeitado.
+ * 11 dígitos sem o 55 só é brasileiro quando bate com o formato DDD+9+8 (celular); senão não é número
+ * nosso — por exemplo um celular dos EUA também tem 11 dígitos, mas a terceira posição não é '9'.
  */
 export function telefoneCanonico(texto: string | null | undefined): string | null {
   if (!texto) return null
   let dig = texto.replace(/\D/g, '')
   if (dig.length > 0 && dig[0] === '0') dig = dig.slice(1)
+  if (dig.length === 11 && !CELULAR_LOCAL.test(dig)) return null
   const t = normalizarTelefone(dig)
   if (!t) return null
   if (t[2] === '0') return null
@@ -21,17 +27,17 @@ export function telefoneCanonico(texto: string | null | undefined): string | nul
 
 /**
  * Chave de comparação de telefones de qualquer país.
- * Brasileiro (55 + 12/13 dígitos, ou digitado localmente com 10/11) vira a forma canônica;
- * já internacional (8 a 15 dígitos) fica como veio — o JID sempre traz o código do país,
- * então não há o que canonicalizar. O resto é null.
+ * Brasileiro (55 + 12/13 dígitos, DDD+8 digitado localmente com 10 dígitos, ou celular DDD+9+8 com
+ * 11 dígitos) vira a forma canônica; já internacional (8 a 15 dígitos) fica como veio — o JID sempre
+ * traz o código do país, então não há o que canonicalizar. O resto é null.
  */
 export function chaveTelefone(texto: string | null | undefined): string | null {
   if (!texto) return null
   let dig = texto.replace(/\D/g, '')
   if (dig.length > 0 && dig[0] === '0') dig = dig.slice(1)
-  if ((dig.startsWith('55') && (dig.length === 12 || dig.length === 13)) || dig.length === 10 || dig.length === 11) {
-    return telefoneCanonico(texto)
-  }
+  const brasileiro =
+    (dig.startsWith('55') && (dig.length === 12 || dig.length === 13)) || dig.length === 10 || (dig.length === 11 && CELULAR_LOCAL.test(dig))
+  if (brasileiro) return telefoneCanonico(texto)
   if (dig.length >= 8 && dig.length <= 15) return dig
   return null
 }
