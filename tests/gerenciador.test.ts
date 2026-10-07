@@ -163,6 +163,54 @@ describe('gerenciador de conexões', () => {
     await Promise.all([g.adicionar(numero(1)), g.adicionar(numero(1))])
     expect(criarChamadas).toBe(1)
   })
+
+  it('parar vence um adicionar que ainda está na fila, atrás de uma troca de sessão em andamento', async () => {
+    const eventos: string[] = []
+    let criarChamadas = 0
+    const comecouNovaSessao = deferido<void>()
+    const liberaNovaSessao = deferido<void>()
+    const criar = (): { conexao: ConexaoGerida; expedidor: { iniciar: () => void; parar: () => void; acordar: () => Promise<void> } } => {
+      criarChamadas++
+      const conexao: ConexaoGerida = {
+        estadoAtual: { status: 'conectado', qr: null, desde: AGORA, numero: null, motivo: null },
+        iniciar: async () => void eventos.push('iniciar'),
+        parar: async () => void eventos.push('parar'),
+        novaSessao: async () => {
+          eventos.push('nova-inicio')
+          comecouNovaSessao.resolve()
+          await liberaNovaSessao.promise
+          eventos.push('nova-fim')
+        }
+      }
+      const expedidor = {
+        iniciar: () => void eventos.push('exp-iniciar'),
+        parar: () => void eventos.push('exp-parar'),
+        acordar: async () => {}
+      }
+      return { conexao, expedidor }
+    }
+    const g = new GerenciadorConexoes(criar, log)
+
+    await g.adicionar(numero(1)) // liga normalmente
+    expect(criarChamadas).toBe(1)
+    eventos.length = 0 // só nos importa a corrida a seguir
+
+    const pNova = g.novaSessao(1) // começa a trocar de sessão (a linha continua em this.linhas)
+    await comecouNovaSessao.promise // garante que a troca já está rodando, não só enfileirada
+    const pAdicionarDeNovo = g.adicionar(numero(1)) // fica na fila, atrás da troca de sessão
+    const pParar = g.parar(1) // pede para desligar antes do adicionar da fila rodar
+
+    liberaNovaSessao.resolve()
+    await pNova
+    await pAdicionarDeNovo
+    await pParar
+
+    // o adicionar que ficou na fila não chegou a criar outra conexão nem a religar o expedidor
+    expect(criarChamadas).toBe(1)
+    expect(eventos).toEqual(['nova-inicio', 'nova-fim', 'exp-parar', 'parar'])
+    expect(g.estado(1)).toBeNull()
+    expect(g.conexao(1)).toBeNull()
+  })
 })
 
 describe('pastas de sessão', () => {

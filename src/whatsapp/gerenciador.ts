@@ -99,6 +99,13 @@ export class GerenciadorConexoes<C extends ConexaoGerida> {
   private linhas = new Map<number, LinhaNumero<C>>()
   /** Uma fila por número: adicionar/parar/novaSessao do mesmo número nunca correm ao mesmo tempo. */
   private fila = new Map<number, Promise<unknown>>()
+  /**
+   * O que foi pedido por último para este número, decidido na hora da chamada (não quando ela
+   * roda). Sem isso, um adicionar() que ainda está esperando a vez na fila (atrás de um
+   * parar/novaSessao em andamento) não saberia que um parar() pedido depois dele já decidiu
+   * que o número deveria ficar desligado, e ligaria a conexão de novo.
+   */
+  private desejado = new Map<number, boolean>()
 
   constructor(
     private readonly criar: (numero: Numero) => LinhaNumero<C>,
@@ -131,10 +138,14 @@ export class GerenciadorConexoes<C extends ConexaoGerida> {
 
   /** Liga um número. Chamar de novo para um número já ligado não faz nada. */
   async adicionar(numero: Numero): Promise<void> {
+    this.desejado.set(numero.id, true)
     return this.porNumero(numero.id, () => this.adicionarAgora(numero))
   }
 
   private async adicionarAgora(numero: Numero): Promise<void> {
+    // Um parar() pedido depois deste adicionar(), mas que rodou antes dele chegar na fila
+    // (ou enquanto este esperava a vez), já decidiu que o número não deve ligar.
+    if (this.desejado.get(numero.id) === false) return
     if (this.linhas.has(numero.id)) return
     const linha = this.criar(numero)
     this.linhas.set(numero.id, linha)
@@ -150,12 +161,17 @@ export class GerenciadorConexoes<C extends ConexaoGerida> {
   }
 
   async parar(numeroId: number): Promise<void> {
+    // Decide já, na hora: é o que avisa um adicionar() em andamento ou ainda na fila que este
+    // número não deve mais ligar (ver adicionarAgora).
+    this.desejado.set(numeroId, false)
     const linha = this.linhas.get(numeroId)
-    if (!linha) return
-    // Tira a linha do mapa já, na hora: é o que avisa um adicionar() em andamento (via a
-    // checagem acima) que esta conexão não é mais a atual.
+    // Tira a linha do mapa já, na hora, se havia uma: é o que avisa um adicionar() que já
+    // passou da fila e está esperando iniciar() que esta conexão não é mais a atual.
     this.linhas.delete(numeroId)
+    // Sempre entra na fila, mesmo sem linha: só assim um adicionar() enfileirado antes deste
+    // parar() (e que ainda não rodou) continua vendo a ordem certa das coisas quando rodar.
     return this.porNumero(numeroId, async () => {
+      if (!linha) return
       linha.expedidor.parar()
       try {
         await linha.conexao.parar()
