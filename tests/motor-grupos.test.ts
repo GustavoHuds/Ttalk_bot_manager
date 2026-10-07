@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { Funcionario, Grupo } from '../src/db/grupos.js'
 import { interpretar } from '../src/grupos/comandos.js'
 import { processarComando } from '../src/grupos/motor.js'
-import { chaveTelefone } from '../src/grupos/pessoas.js'
 import type { AcaoGrupo, ContextoGrupos, MembroGrupo, Pessoa } from '../src/grupos/tipos.js'
 import { AGORA } from './ajuda.js'
 
@@ -204,7 +203,7 @@ describe('motor do bot de grupos: correções de revisão', () => {
     const cadastro = rodar(ctx({ mencionados: [AMERICANO] }), '/cadastrar @14155550100 Carlos Externo | TI | Remoto')
     const salvar = cadastro.find((a) => a.tipo === 'salvar_funcionario')
     if (salvar?.tipo !== 'salvar_funcionario') throw new Error('esperava salvar_funcionario')
-    expect(salvar.dados.telefone).toBe(chaveTelefone('14155550100'))
+    expect(salvar.dados.telefone).toBe('14155550100')
 
     const carlos: Funcionario = {
       id: 9, nome: 'Carlos Externo', telefone: salvar.dados.telefone, lid: null,

@@ -43,7 +43,7 @@ export function paginaEquipe(lista: Funcionario[], gestores: Set<number>, q: str
     .map((f) => {
       const gestor = gestores.has(f.id)
       const botao = gestor
-        ? '<button title="Tirar o poder de gestor">👔 gestor</button>'
+        ? `<button title="Tirar o poder de gestor">👔 gestor${f.ativo ? '' : ' (inativo)'}</button>`
         : `<button${f.ativo ? '' : ' disabled'}>Tornar gestor</button>`
       return `<tr${f.ativo ? '' : ' class="suave"'}>
         <td><a href="/equipe/${f.id}"><strong>${esc(f.nome)}</strong></a>${f.ativo ? '' : '<br>inativo'}</td>
@@ -121,13 +121,24 @@ export function paginaImportar(usuario: string, csv: string, previa: LinhaPrevia
   return layout(
     'Importar equipe',
     `<p><a href="/equipe">← Equipe</a></p><h1>Importar equipe (CSV)</h1>${falha(erro)}
-    <div class="cartao"><p>Uma pessoa por linha, separando com ponto e vírgula: <code>nome;telefone;setor;loja;cargo;nascimento</code>. O cabeçalho é opcional; cargo e nascimento podem ficar vazios. Quem já está no cadastro (mesmo telefone) é atualizado.</p>
+    <div class="cartao"><p>Uma pessoa por linha, separando com ponto e vírgula ou vírgula: <code>nome;telefone;setor;loja;cargo;nascimento</code>. O cabeçalho é opcional; cargo e nascimento podem ficar vazios (e, para quem já está no cadastro, mantêm o valor atual). Quem já está no cadastro (mesmo telefone) é atualizado.</p>
     <form method="post" action="/equipe/importar" style="display:grid;gap:8px">
       <input type="file" accept=".csv,text/csv,text/plain" id="arquivo">
       <textarea name="csv" id="csv" rows="10" placeholder="Ana Souza;83999990001;Vendas;Centro;Gerente;10/05/1990">${esc(csv)}</textarea>
       <div><button>Conferir</button></div>
     </form></div>${tabela}
-    <script>document.getElementById('arquivo').addEventListener('change',function(e){var f=e.target.files[0];if(!f)return;var r=new FileReader();r.onload=function(){document.getElementById('csv').value=r.result;};r.readAsText(f,'utf-8');});</script>`,
+    <script>document.getElementById('arquivo').addEventListener('change',function(e){
+      var f=e.target.files[0];if(!f)return;
+      var ler=function(cod){
+        var r=new FileReader();
+        r.onload=function(){
+          if(cod==='utf-8'&&r.result.indexOf('�')!==-1){ler('windows-1252');return;}
+          document.getElementById('csv').value=r.result;
+        };
+        r.readAsText(f,cod);
+      };
+      ler('utf-8');
+    });</script>`,
     usuario
   )
 }

@@ -134,6 +134,16 @@ describe('orquestrador do bot de grupos', () => {
     expect(carla).toMatchObject({ nome: 'Carla Dias', telefone: '14155550123', lid: '777@lid' })
   })
 
+  it('telefone estrangeiro de 10 dígitos (mesmo tamanho de um DDD+8 brasileiro) via LID não ganha o 55 inventado', async () => {
+    // Dinamarca +45 12345678: 10 dígitos com o código do país, do mesmo tamanho de um DDD+8 digitado
+    // localmente no Brasil. O bug antigo decidia pelo tamanho (chaveTelefone) e virava "554512345678".
+    falsa.lids.set('777@lid', '4512345678')
+    await enviar(msg('/cadastrar @777 Dana Nielsen | Estoque | Norte', { mencionados: ['777@lid'] }))
+    const dana = grupos.porTelefone('4512345678')
+    expect(dana).toMatchObject({ nome: 'Dana Nielsen', telefone: '4512345678', lid: '777@lid' })
+    expect(grupos.porTelefone('554512345678')).toBeNull()
+  })
+
   it('falha ao gravar desfaz tudo e avisa que não conseguiu', async () => {
     vi.spyOn(grupos, 'salvarFuncionario').mockImplementation(() => {
       throw new Error('disco cheio')

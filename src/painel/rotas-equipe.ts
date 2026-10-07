@@ -144,7 +144,7 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
     d.repo.transacao(() => {
       if (ativo) g.adicionarGestor(f.id, `painel:${a.usuario(req)}`, a.agora())
       else g.removerGestor(f.id)
-      d.repo.auditar(a.usuario(req), ativo ? 'gestor_adicionado' : 'gestor_removido', f.nome, a.agora())
+      d.repo.auditar(a.usuario(req), ativo ? 'gestor_adicionado' : 'gestor_removido', `#${f.id} ${f.nome}`, a.agora())
     })
     return rep.redirect('/equipe', 303)
   })
@@ -154,7 +154,8 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
     if (!f) return rep.code(404).send('Pessoa não encontrada')
     d.repo.transacao(() => {
       g.excluirFuncionario(f.id)
-      d.repo.auditar(a.usuario(req), 'excluir_funcionario', f.nome, a.agora())
+      // Só o id: a pessoa foi excluída do cadastro, o nome não fica preso para sempre na auditoria.
+      d.repo.auditar(a.usuario(req), 'excluir_funcionario', `#${f.id}`, a.agora())
     })
     return rep.redirect('/equipe?excluido=1', 303)
   })
@@ -179,8 +180,18 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
     d.repo.transacao(() => {
       for (const { dados } of validas) {
         const atual = g.porTelefone(dados.telefone!)
-        // LID e situação vêm do que já existe: a planilha não sabe deles.
-        g.salvarFuncionario(atual?.id ?? null, { ...dados, lid: atual?.lid ?? null, ativo: atual?.ativo ?? true }, a.agora())
+        // LID e situação vêm do que já existe: a planilha não sabe deles. Célula vazia (setor, loja,
+        // cargo, nascimento) não apaga o que já estava lá: só confirma quando a planilha traz algo.
+        const mesclado: DadosFuncionario = {
+          ...dados,
+          setor: dados.setor ?? atual?.setor ?? null,
+          loja: dados.loja ?? atual?.loja ?? null,
+          cargo: dados.cargo ?? atual?.cargo ?? null,
+          nascimento: dados.nascimento ?? atual?.nascimento ?? null,
+          lid: atual?.lid ?? null,
+          ativo: atual?.ativo ?? true
+        }
+        g.salvarFuncionario(atual?.id ?? null, mesclado, a.agora())
       }
       d.repo.auditar(a.usuario(req), 'importar_equipe', `${validas.length} pessoas (${linhas.length - validas.length} linhas com erro)`, a.agora())
     })

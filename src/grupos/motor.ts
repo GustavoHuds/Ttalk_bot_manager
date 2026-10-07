@@ -1,7 +1,7 @@
 import { semAcento } from '../conversa/textos.js'
 import type { DadosFuncionario, Funcionario } from '../db/grupos.js'
 import { COMANDOS, acharComando, type Comando, type DefComando } from './comandos.js'
-import { acharFuncionario, chaveTelefone, formatarTelefone, telefoneCanonico, usuarioDoJid } from './pessoas.js'
+import { acharFuncionario, formatarTelefone, telefoneDigitado, usuarioDoJid } from './pessoas.js'
 import type { AcaoGrupo, ContextoGrupos, Pessoa } from './tipos.js'
 
 /** Listas longas no WhatsApp ficam ilegíveis: corta e diz quantos faltaram. */
@@ -32,15 +32,14 @@ function descrever(f: Funcionario): string {
 }
 
 /**
- * "/cadastrar 5583999990001 Nome | ..." no privado: o primeiro termo é o telefone.
- * Com "+" e não "+55": número estrangeiro digitado — mantém os dígitos como vieram
- * (telefoneCanonico assumiria DDD brasileiro e inventaria um número errado).
+ * "/cadastrar 5583999990001 Nome | ..." no privado: o primeiro termo é o telefone, na mesma regra
+ * de quem digita no painel ou na planilha (telefoneDigitado): sem "+" assume o Brasil; com "+" e não
+ * "+55" é estrangeiro e mantém os dígitos como vieram.
  */
 function separarTelefone(texto: string): { pessoa: Pessoa | null; resto: string } {
   const [primeiro = '', ...resto] = texto.split(' ')
   if (!/^\+?[\d().-]{10,}$/.test(primeiro)) return { pessoa: null, resto: texto }
-  const estrangeiro = primeiro.startsWith('+') && !primeiro.startsWith('+55')
-  const tel = estrangeiro ? primeiro.replace(/\D/g, '') : telefoneCanonico(primeiro)
+  const tel = telefoneDigitado(primeiro)
   if (!tel) return { pessoa: null, resto: texto }
   return { pessoa: { jid: `${tel}@s.whatsapp.net`, telefone: tel, lid: null }, resto: resto.join(' ') }
 }
@@ -160,9 +159,10 @@ class Execucao {
     const valido = letras >= 2 && !/\d/.test(nome) && nome.length <= 80 && !!setor && !!loja && [setor, loja, cargo].every((c) => c.length <= 60)
     if (!valido) return this.uso()
 
-    // pessoa.telefone já chega como chave (o orquestrador resolve o JID): não canonicalizar de novo,
-    // senão um número estrangeiro é tratado como brasileiro sem o 55 e sai errado.
-    const telefone = chaveTelefone(pessoa.telefone)
+    // pessoa.telefone já chega como chave (o orquestrador resolve o JID, ou separarTelefone digitou):
+    // usar direto, sem reprocessar — reprocessar um valor que já é a chave é o que inventava o 55
+    // em número estrangeiro.
+    const telefone = pessoa.telefone
     if (!telefone && !pessoa.lid) return responder('Não consegui identificar essa pessoa. Mencione com @ ou informe o telefone.')
     const porTelefone = telefone ? this.ctx.funcionarios.find((f) => f.telefone === telefone) : undefined
     const porLid = pessoa.lid ? this.ctx.funcionarios.find((f) => f.lid === pessoa.lid) : undefined

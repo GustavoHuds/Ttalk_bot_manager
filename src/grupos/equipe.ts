@@ -1,6 +1,6 @@
 import { semAcento } from '../conversa/textos.js'
 import type { DadosFuncionario } from '../db/grupos.js'
-import { telefoneCanonico } from './pessoas.js'
+import { telefoneDigitado } from './pessoas.js'
 
 export class ErroEquipe extends Error {}
 
@@ -38,30 +38,16 @@ export function dataNascimento(v: string | undefined): string | null {
   return `${ano}-${mes}-${dia}`
 }
 
-/**
- * Telefone digitado por uma pessoa (painel ou planilha): sem "+" assume o Brasil e exige DDD válido
- * (mesma regra de telefoneCanonico); com "+" e não "+55" é um número de fora do país, guardado como
- * os dígitos vieram (8 a 15), do mesmo jeito que o WhatsApp entrega um JID estrangeiro — assim o que
- * fica salvo casa com o que `chaveTelefone` calcularia para esse mesmo número.
- */
-function telefoneDigitado(bruto: string): string | null {
-  if (!bruto) return null
-  if (bruto.startsWith('+') && !bruto.startsWith('+55')) {
-    const dig = bruto.replace(/\D/g, '')
-    if (dig.length < 8 || dig.length > 15) throw new ErroEquipe(`telefone "${bruto}" deve ter de 8 a 15 dígitos`)
-    return dig
-  }
-  const telefone = telefoneCanonico(bruto)
-  if (!telefone) throw new ErroEquipe(`telefone "${bruto}" não parece um número brasileiro com DDD`)
-  return telefone
-}
-
 /** Valida o que veio do painel ou da planilha. O LID nunca vem daqui: só o WhatsApp o informa. */
 export function validarFuncionario(e: EntradaFuncionario, o: { telefoneObrigatorio: boolean; lid: string | null }): DadosFuncionario {
   const nome = (e.nome ?? '').trim().replace(/\s+/g, ' ')
   if (!/\p{L}{2,}/u.test(nome) || nome.length > 80) throw new ErroEquipe('nome é obrigatório (até 80 caracteres)')
-  const bruto = (e.telefone ?? '').trim()
+  const bruto = (e.telefone ?? '').trim().replace(/^'/, '')
   const telefone = telefoneDigitado(bruto)
+  if (bruto && !telefone) {
+    const estrangeiro = bruto.startsWith('+') && !bruto.startsWith('+55')
+    throw new ErroEquipe(estrangeiro ? `telefone "${bruto}" deve ter de 8 a 15 dígitos` : `telefone "${bruto}" não parece um número brasileiro com DDD`)
+  }
   if (!telefone && o.telefoneObrigatorio) throw new ErroEquipe('telefone é obrigatório')
   return {
     nome,
@@ -105,11 +91,31 @@ export interface LinhaCsv {
   erro: string | null
 }
 
-/** Planilha: nome;telefone;setor;loja;cargo;nascimento (cabeçalho opcional; colunas a mais são ignoradas). */
+/** Conta ";" e "," fora de aspas na primeira linha; o separador é o que aparece mais (";" no empate). */
+function detectarSeparador(linha: string): string {
+  let aspas = false
+  let pontoVirgula = 0
+  let virgula = 0
+  for (const c of linha) {
+    if (c === '"') aspas = !aspas
+    else if (!aspas && c === ';') pontoVirgula++
+    else if (!aspas && c === ',') virgula++
+  }
+  return virgula > pontoVirgula ? ',' : ';'
+}
+
+/** Planilha: nome;telefone;setor;loja;cargo;nascimento (cabeçalho opcional; aceita "," ou ";"; colunas a mais são ignoradas). */
 export function lerCsvEquipe(texto: string): LinhaCsv[] {
-  const linhas = texto.replace(/^﻿/, '').split(/\r?\n/)
+  const semBom = texto.replace(/^﻿/, '')
+  // '�' é o sinal clássico de um arquivo lido com a codificação errada (ex.: Latin-1 lido como UTF-8).
+  if (semBom.includes('�')) {
+    throw new ErroEquipe('o arquivo não parece estar em UTF-8 (caracteres ilegíveis); salve o CSV como "UTF-8" e tente de novo')
+  }
+  const linhas = semBom.split(/\r?\n/)
+  const primeiraIdx = linhas.findIndex((l) => l.trim())
   const naoVazias = linhas.filter((l) => l.trim())
-  const primeiroCampo = naoVazias[0] ? dividirLinhaCsv(naoVazias[0])[0] : ''
+  const separador = naoVazias[0] ? detectarSeparador(naoVazias[0]) : ';'
+  const primeiroCampo = naoVazias[0] ? dividirLinhaCsv(naoVazias[0], separador)[0] : ''
   const temCabecalho = semAcento(primeiroCampo ?? '') === 'nome'
   const linhasDeDados = temCabecalho ? naoVazias.length - 1 : naoVazias.length
   if (linhasDeDados > MAX_LINHAS_CSV) {
@@ -119,8 +125,8 @@ export function lerCsvEquipe(texto: string): LinhaCsv[] {
   const vistos = new Map<string, number>()
   linhas.forEach((bruta, i) => {
     if (!bruta.trim()) return
-    if (i === 0 && temCabecalho) return
-    const [nome, telefone, setor, loja, cargo, nascimento] = dividirLinhaCsv(bruta)
+    if (i === primeiraIdx && temCabecalho) return
+    const [nome, telefone, setor, loja, cargo, nascimento] = dividirLinhaCsv(bruta, separador)
     const n = i + 1
     try {
       const dados = validarFuncionario({ nome, telefone, setor, loja, cargo, nascimento }, { telefoneObrigatorio: true, lid: null })

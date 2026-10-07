@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { Funcionario } from '../src/db/grupos.js'
 import { COMANDOS, acharComando, ehComando, interpretar } from '../src/grupos/comandos.js'
-import { acharFuncionario, chaveTelefone, formatarTelefone, pessoaDoJid, telefoneCanonico, usuarioDoJid, vinculosDeLid } from '../src/grupos/pessoas.js'
+import {
+  acharFuncionario,
+  formatarTelefone,
+  pessoaDoJid,
+  telefoneCanonico,
+  telefoneDeJid,
+  telefoneDigitado,
+  usuarioDoJid,
+  vinculosDeLid
+} from '../src/grupos/pessoas.js'
 
 const f = (id: number, telefone: string | null, lid: string | null): Funcionario => ({
   id,
@@ -108,19 +117,49 @@ describe('pessoas', () => {
     expect(pessoaDoJid('14155550123@s.whatsapp.net').telefone).toBe('14155550123')
     // Número de 12 dígitos que não é brasileiro (código 52, México): fica com os dígitos como vieram.
     expect(pessoaDoJid('521771234567@s.whatsapp.net').telefone).toBe('521771234567')
-    expect(chaveTelefone('521771234567')).toBe('521771234567')
+    expect(telefoneDeJid('521771234567')).toBe('521771234567')
   })
 
-  it('chaveTelefone só trata 11 dígitos como celular brasileiro (DDD 11-99 + 9 na terceira posição)', () => {
-    // Celular brasileiro: DDD 83 + 9 (prefixo de celular) + 8 dígitos.
-    expect(chaveTelefone('83999990001')).toBe('5583999990001')
-    // Celular dos EUA: 11 dígitos também, mas a terceira posição é '1', não '9' — não é um DDD+9 válido.
-    expect(chaveTelefone('14155550123')).toBe('14155550123')
+  it('telefoneDeJid nunca usa o tamanho para adivinhar o país (só o prefixo "55" decide)', () => {
+    // Dinamarca (+45), 10 dígitos com o código do país: do mesmo tamanho de um DDD+8 brasileiro,
+    // mas sem o "55" não é um número daqui — o bug antigo (decidir pelo tamanho) inventava o 55.
+    expect(telefoneDeJid('4512345678')).toBe('4512345678')
+    // Celular dos EUA, 11 dígitos: também não começa com "55".
+    expect(telefoneDeJid('14155550123')).toBe('14155550123')
+    // Brasileiro de verdade: começa com "55" e tem 10 ou 11 dígitos depois.
+    expect(telefoneDeJid('5583999990001')).toBe('5583999990001')
+    expect(telefoneDeJid('558399990001')).toBe('5583999990001')
+    expect(telefoneDeJid(null)).toBeNull()
+    expect(telefoneDeJid('123')).toBeNull()
   })
 
-  it('acha no cadastro pelo telefone, senão pelo LID; telefone tem prioridade sobre LID', () => {
+  it('telefoneDigitado: sem "+" assume o Brasil; com "+" e não "+55" mantém os dígitos (estrangeiro)', () => {
+    expect(telefoneDigitado('83999990001')).toBe('5583999990001')
+    expect(telefoneDigitado('(83) 99999-0001')).toBe('5583999990001')
+    expect(telefoneDigitado('+55 83 99999-0001')).toBe('5583999990001')
+    expect(telefoneDigitado('+45 12345678')).toBe('4512345678')
+    expect(telefoneDigitado('+65 8123 4567')).toBe('6581234567')
+    expect(telefoneDigitado('+7 999 123 4567')).toBe('79991234567')
+    expect(telefoneDigitado('+123')).toBeNull()
+    expect(telefoneDigitado('99')).toBeNull()
+    expect(telefoneDigitado('')).toBeNull()
+    expect(telefoneDigitado(null)).toBeNull()
+    // Apóstrofo na frente (neutralização de fórmula do Excel): ignorado, para reimportar o que foi exportado.
+    expect(telefoneDigitado("'+4512345678")).toBe('4512345678')
+  })
+
+  it('a mesma regra dos dois lados: o que telefoneDigitado grava bate com o que telefoneDeJid lê de volta do WhatsApp', () => {
+    for (const digitado of ['+45 12345678', '+65 8123 4567', '+7 999 123 4567']) {
+      const salvo = telefoneDigitado(digitado)!
+      const doWhatsapp = pessoaDoJid(`${salvo}@s.whatsapp.net`).telefone
+      expect(doWhatsapp).toBe(salvo)
+      expect(acharFuncionario([f(1, salvo, null)], { jid: 'x', telefone: doWhatsapp, lid: null })!.id).toBe(1)
+    }
+  })
+
+  it('acha no cadastro pelo telefone (já como chave, sem reprocessar), senão pelo LID; telefone tem prioridade sobre LID', () => {
     const lista = [f(1, '5583999990001', null), f(2, null, '222@lid')]
-    expect(acharFuncionario(lista, { jid: 'x', telefone: '558399990001', lid: null })!.id).toBe(1)
+    expect(acharFuncionario(lista, { jid: 'x', telefone: '5583999990001', lid: null })!.id).toBe(1)
     expect(acharFuncionario(lista, { jid: 'x', telefone: null, lid: '222@lid' })!.id).toBe(2)
     expect(acharFuncionario(lista, { jid: 'x', telefone: null, lid: '333@lid' })).toBeNull()
     // Telefone bate com o 1, LID bate com o 2: telefone decide.
