@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
+import type { GroupMetadata, WAMessage } from '@whiskeysockets/baileys'
 import { entradaDaMensagem, hashOpcao, identidade, opcoesVotadas } from '../src/whatsapp/normalizar.js'
+import {
+  infoDoGrupo,
+  jidIgnoradoGrupos,
+  membrosDoGrupo,
+  mencoesDaMensagem,
+  origemComando,
+  souEu,
+  textoDaMensagem
+} from '../src/whatsapp/normalizar.js'
 
 const base = (message: object, key: object = {}) =>
   ({ key: { remoteJid: '5583999990000@s.whatsapp.net', id: 'X', fromMe: false, ...key }, message }) as never
@@ -43,5 +53,62 @@ describe('normalização das mensagens do Baileys', () => {
 
   it('voto chega como hash da opção e volta ao texto', () => {
     expect(opcoesVotadas([Buffer.from(hashOpcao('Tarde'), 'hex')], ['Manhã', 'Tarde'])).toEqual(['Tarde'])
+  })
+})
+
+const msgGrupo = (extra: Record<string, unknown> = {}) =>
+  ({
+    key: { remoteJid: '120363-1@g.us', participant: '111@lid', participantAlt: '5583999990001@s.whatsapp.net', id: 'X', fromMe: false },
+    message: { extendedTextMessage: { text: '/quem @222', contextInfo: { mentionedJid: ['222@lid'] } } },
+    ...extra
+  }) as unknown as WAMessage
+
+describe('bot de grupos: leitura das mensagens', () => {
+  it('no grupo, o remetente é o participante, com telefone e LID', () => {
+    expect(origemComando(msgGrupo())).toEqual({
+      chat: '120363-1@g.us',
+      ehGrupo: true,
+      remetente: { jid: '111@lid', telefone: '5583999990001', lid: '111@lid' }
+    })
+  })
+
+  it('no privado, o remetente é o próprio chat; status e canais são ignorados', () => {
+    const privado = { key: { remoteJid: '5583999990001@s.whatsapp.net', id: 'Y' }, message: { conversation: '/menu' } } as unknown as WAMessage
+    expect(origemComando(privado)).toEqual({
+      chat: '5583999990001@s.whatsapp.net',
+      ehGrupo: false,
+      remetente: { jid: '5583999990001@s.whatsapp.net', telefone: '5583999990001', lid: null }
+    })
+    expect(origemComando({ key: { remoteJid: 'status@broadcast', id: 'Z' } } as unknown as WAMessage)).toBeNull()
+    expect(jidIgnoradoGrupos('120363-1@g.us')).toBe(false)
+    expect(jidIgnoradoGrupos('123@newsletter')).toBe(true)
+  })
+
+  it('texto, menções e mensagem citada', () => {
+    expect(textoDaMensagem(msgGrupo())).toBe('/quem @222')
+    expect(mencoesDaMensagem(msgGrupo())).toEqual({ mencionados: ['222@lid'], citada: null })
+    const resposta = msgGrupo({
+      message: { extendedTextMessage: { text: '/quem', contextInfo: { participant: '333@lid', quotedMessage: { conversation: 'oi' } } } }
+    })
+    expect(mencoesDaMensagem(resposta)).toEqual({ mencionados: [], citada: '333@lid' })
+  })
+
+  it('dados do grupo: o bot é reconhecido por qualquer um dos seus JIDs e sai da lista de membros', () => {
+    const eu = ['5583900000000@s.whatsapp.net', '888@lid']
+    const g = {
+      id: '120363-1@g.us',
+      subject: 'Loja Centro',
+      participants: [
+        { id: '888@lid', admin: 'admin' },
+        { id: '111@lid', phoneNumber: '5583999990001@s.whatsapp.net', admin: null },
+        { id: '5583999990002@s.whatsapp.net', admin: 'superadmin' }
+      ]
+    } as unknown as GroupMetadata
+    expect(infoDoGrupo(g, eu)).toEqual({ jid: '120363-1@g.us', nome: 'Loja Centro', botAdmin: true })
+    expect(membrosDoGrupo(g, eu)).toEqual([
+      { jid: '111@lid', telefone: '5583999990001', lid: '111@lid', admin: false },
+      { jid: '5583999990002@s.whatsapp.net', telefone: '5583999990002', lid: null, admin: true }
+    ])
+    expect(souEu(eu, '5583900000000:7@s.whatsapp.net')).toBe(true)
   })
 })

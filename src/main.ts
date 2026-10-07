@@ -37,6 +37,7 @@ const vigia = new VigiaConexao(alertas)
 let expedidor: Expedidor | null = null
 const conexao: ConexaoBaileys = new ConexaoBaileys({
   numeroId: 1,
+  papel: 'recrutamento',
   pastaSessao: pastaSessao(amb.dados),
   repo,
   log,
