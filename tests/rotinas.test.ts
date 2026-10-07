@@ -79,4 +79,13 @@ describe('vigia da conexão', () => {
     vigia.verificar({ status: 'desconectado', desde: t, motivo: 'sessão encerrada' })
     expect(enviados).toEqual(['Bot fora do ar há mais de 10 minutos', 'Conexão restabelecida', 'Sessão do WhatsApp encerrada'])
   })
+
+  it('com vários números, o alerta diz qual caiu', () => {
+    const enviados: { assunto: string; texto: string }[] = []
+    const alertas = { enviar: async (assunto: string, texto: string) => void enviados.push({ assunto, texto }) } as unknown as Alertas
+    const vigia = new VigiaConexao(alertas, () => AGORA, 'Avisos')
+    vigia.verificar({ status: 'desconectado', desde: AGORA, motivo: 'sessão encerrada' })
+    expect(enviados[0]!.assunto).toBe('Sessão do WhatsApp encerrada (Avisos)')
+    expect(enviados[0]!.texto).toContain('Números')
+  })
 })
