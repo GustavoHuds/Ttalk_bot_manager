@@ -7,9 +7,13 @@ import {
   isLidUser,
   isPnUser,
   jidDecode,
+  jidNormalizedUser,
   normalizeMessageContent,
+  type GroupMetadata,
   type WAMessage
 } from '@whiskeysockets/baileys'
+import { ehComando } from '../grupos/comandos.js'
+import type { InfoGrupo, MembroGrupo, MensagemGrupo, Pessoa } from '../grupos/tipos.js'
 import type { Entrada } from '../conversa/tipos.js'
 
 /** Números do Baileys podem chegar como Long. */
@@ -25,6 +29,7 @@ export function jidIgnorado(jid: string | null | undefined): boolean {
   return !jid || !!isJidGroup(jid) || !!isJidBroadcast(jid) || !!isJidStatusBroadcast(jid) || !!isJidNewsletter(jid)
 }
 
+/** Dígitos crus do JID @s.whatsapp.net (recrutamento); a chave do bot de grupos é chaveTelefoneDeJid (grupos/pessoas.ts). */
 export function telefoneDoJid(jid: string | null | undefined): string | null {
   if (!jid || !isPnUser(jid)) return null
   const user = jidDecode(jid)?.user
@@ -95,4 +100,78 @@ export function hashOpcao(opcao: string): string {
 export function opcoesVotadas(hashes: Uint8Array[], opcoes: string[]): string[] {
   const porHash = new Map(opcoes.map((o) => [hashOpcao(o), o]))
   return hashes.map((h) => porHash.get(Buffer.from(h).toString('hex'))).filter((o): o is string => !!o)
+}
+
+/** Bot de grupos: aceita grupos e conversas privadas; nunca status, listas de transmissão ou canais. */
+export function jidIgnoradoGrupos(jid: string | null | undefined): boolean {
+  return !jid || !!isJidBroadcast(jid) || !!isJidStatusBroadcast(jid) || !!isJidNewsletter(jid)
+}
+
+/** Só o texto digitado (comandos não vêm em legenda de foto). */
+export function textoDaMensagem(msg: WAMessage): string | null {
+  const c = normalizeMessageContent(msg.message)
+  return c?.conversation || c?.extendedTextMessage?.text || null
+}
+
+function lidDe(...jids: (string | null | undefined)[]): string | null {
+  for (const j of jids) if (j && isLidUser(j)) return jidNormalizedUser(j)
+  return null
+}
+
+/** Onde responder e quem mandou. No grupo, o remetente é o participante (LID ou telefone). */
+export function origemComando(msg: WAMessage): { chat: string; ehGrupo: boolean; remetente: Pessoa } | null {
+  const chat = msg.key.remoteJid
+  if (!chat || jidIgnoradoGrupos(chat)) return null
+  if (!isJidGroup(chat)) {
+    const quem = identidade(msg)
+    return quem ? { chat, ehGrupo: false, remetente: quem } : null
+  }
+  const autor = msg.key.participant ? jidNormalizedUser(msg.key.participant) : null
+  if (!autor) return null
+  const alt = msg.key.participantAlt ? jidNormalizedUser(msg.key.participantAlt) : null
+  return { chat, ehGrupo: true, remetente: { jid: autor, telefone: telefoneDoJid(autor) ?? telefoneDoJid(alt), lid: lidDe(autor, alt) } }
+}
+
+export function mencoesDaMensagem(msg: WAMessage): { mencionados: string[]; citada: string | null } {
+  const info = normalizeMessageContent(msg.message)?.extendedTextMessage?.contextInfo
+  const mencionados = (info?.mentionedJid ?? []).filter((j): j is string => !!j).map((j) => jidNormalizedUser(j))
+  const citada = info?.quotedMessage && info.participant ? jidNormalizedUser(info.participant) : null
+  return { mencionados, citada }
+}
+
+type Participante = string | { id: string; lid?: string | undefined; phoneNumber?: string | undefined }
+
+/** O bot aparece no grupo pelo telefone ou pelo LID, conforme o modo do grupo. */
+export function souEu(eu: string[], p: Participante): boolean {
+  const ids = typeof p === 'string' ? [p] : [p.id, p.lid, p.phoneNumber]
+  return ids.filter((j): j is string => !!j).some((j) => eu.includes(jidNormalizedUser(j)))
+}
+
+export function infoDoGrupo(g: GroupMetadata, eu: string[]): InfoGrupo {
+  return { jid: g.id, nome: g.subject || 'Grupo sem nome', botAdmin: (g.participants ?? []).some((p) => souEu(eu, p) && !!p.admin) }
+}
+
+/** Participantes sem o próprio bot. */
+export function membrosDoGrupo(g: GroupMetadata, eu: string[]): MembroGrupo[] {
+  return (g.participants ?? [])
+    .filter((p) => !souEu(eu, p))
+    .map((p) => {
+      const id = jidNormalizedUser(p.id)
+      const pn = p.phoneNumber ? jidNormalizedUser(p.phoneNumber) : null
+      return { jid: id, telefone: telefoneDoJid(id) ?? telefoneDoJid(pn), lid: lidDe(p.id, p.lid), admin: !!p.admin }
+    })
+}
+
+/**
+ * Decide se a mensagem é um comando de grupo e já a traduz. Conversa comum (texto que não
+ * começa com "/") nunca sai daqui: quem chama não grava nada no banco nem loga o texto.
+ */
+export function comandoDaMensagem(msg: WAMessage, numeroId: number): MensagemGrupo | null {
+  if (msg.key.fromMe || !msg.key.id || !msg.message) return null
+  const texto = textoDaMensagem(msg)
+  if (!texto || !ehComando(texto)) return null
+  const origem = origemComando(msg)
+  if (!origem) return null
+  const recebidaEm = (paraNumero(msg.messageTimestamp) ?? Math.floor(Date.now() / 1000)) * 1000
+  return { numeroId, id: msg.key.id, ...origem, texto, ...mencoesDaMensagem(msg), recebidaEm }
 }

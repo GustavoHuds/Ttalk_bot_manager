@@ -44,14 +44,20 @@ export class VigiaConexao {
 
   constructor(
     private readonly alertas: Alertas,
-    private readonly relogio: () => number = Date.now
+    private readonly relogio: () => number = Date.now,
+    /** Nome do número, quando há mais de um. */
+    private readonly nome: string | null = null
   ) {}
+
+  private assunto(a: string): string {
+    return this.nome ? `${a} (${this.nome})` : a
+  }
 
   verificar(e: { status: string; desde: number; motivo: string | null }): void {
     if (e.status === 'conectado') {
       if (this.avisado) {
         this.avisado = false
-        void this.alertas.enviar('Conexão restabelecida', 'O bot voltou a se conectar ao WhatsApp.')
+        void this.alertas.enviar(this.assunto('Conexão restabelecida'), 'O bot voltou a se conectar ao WhatsApp.')
       }
       return
     }
@@ -59,15 +65,15 @@ export class VigiaConexao {
     if (e.status === 'desconectado' && e.motivo) {
       this.avisado = true
       void this.alertas.enviar(
-        'Sessão do WhatsApp encerrada',
-        `O bot parou: ${e.motivo}.\nAbra a página /conexao do painel e leia o QR de novo com o celular do RH.`
+        this.assunto('Sessão do WhatsApp encerrada'),
+        `O bot parou: ${e.motivo}.\nAbra a página Números do painel e leia o QR de novo com o celular deste número.`
       )
       return
     }
     if (this.relogio() - e.desde > LIMITE_QUEDA_MS) {
       this.avisado = true
       const situacao = e.status === 'aguardando_qr' ? 'aguardando leitura do QR' : 'sem conexão'
-      void this.alertas.enviar('Bot fora do ar há mais de 10 minutos', `Situação: ${situacao}. Confira a página /saude do painel.`)
+      void this.alertas.enviar(this.assunto('Bot fora do ar há mais de 10 minutos'), `Situação: ${situacao}. Confira a página /saude do painel.`)
     }
   }
 }

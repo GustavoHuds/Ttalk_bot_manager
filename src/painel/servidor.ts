@@ -2,29 +2,37 @@ import { createReadStream } from 'node:fs'
 import cookie from '@fastify/cookie'
 import formbody from '@fastify/formbody'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
-import QRCode from 'qrcode'
+import type { Logger } from 'pino'
 import type { ArmazemArquivos } from '../arquivos.js'
 import { botModelo, paraEditor, prepararBot, type FonteBots } from '../config/bots.js'
 import type { StatusProcesso } from '../config/tipos.js'
+import type { RepoGrupos } from '../db/grupos.js'
+import type { Numero, RepoNumeros } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
 import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { LimiteLogin, senhaConfere } from './auth.js'
 import { paginaEditorBot } from './editor.js'
 import { gerarZip } from './exportar.js'
-import {
-  paginaAuditoria,
-  paginaConexao,
-  paginaLogin,
-  paginaProcesso,
-  paginaProcessos,
-  paginaSaude
-} from './paginas.js'
+import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude } from './paginas.js'
+import { rotasEquipe } from './rotas-equipe.js'
+import { rotasNumeros } from './rotas-numeros.js'
+
+/** O que o painel controla nas conexões (o GerenciadorConexoes, em produção). */
+export interface ControleConexoes {
+  estado(numeroId: number): EstadoConexao | null
+  novaSessao(numeroId: number): Promise<void>
+  ativar(numero: Numero): Promise<void>
+  desativar(numeroId: number): Promise<void>
+}
 
 export interface DependenciasPainel {
   repo: Repositorio
   bots: FonteBots
+  numeros: RepoNumeros
+  grupos: RepoGrupos
   armazem: ArmazemArquivos
-  conexao: { estado: () => EstadoConexao; novaSessao: () => Promise<void> }
+  conexoes: ControleConexoes
+  log: Logger
   usuarios: Map<string, string>
   segredo: string
   cookieSeguro: boolean
@@ -71,9 +79,10 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
   const html = (rep: FastifyReply, corpo: string) => rep.type('text/html; charset=utf-8').send(corpo)
   const usuario = (req: FastifyRequest) => req.usuario!
 
-  /** Para o Uptime Kuma: só diz se está conectado, sem nenhum dado. */
+  /** Para o Uptime Kuma: ok só com todos os números ativos conectados, sem nenhum dado. */
   app.get('/healthz', async (_req, rep) => {
-    const ok = d.conexao.estado().status === 'conectado'
+    const ativos = d.numeros.listar().filter((n) => n.ativo)
+    const ok = ativos.length > 0 && ativos.every((n) => d.conexoes.estado(n.id)?.status === 'conectado')
     return rep.code(ok ? 200 : 503).send({ ok })
   })
 
@@ -108,16 +117,42 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
     return rep.redirect('/login', 303)
   })
 
+  // Só números ativos entram na lista; o número atual do bot (editando) continua oferecido mesmo desativado.
+  const numerosRecrutamento = (incluirId: number | null = null) => {
+    const todos = d.numeros.listar().filter((n) => n.papel === 'recrutamento')
+    const ativos = todos.filter((n) => n.ativo)
+    if (incluirId === null || ativos.some((n) => n.id === incluirId)) return ativos
+    const atual = todos.find((n) => n.id === incluirId)
+    return atual ? [...ativos, atual] : ativos
+  }
+
   app.get<{ Querystring: { salvo?: string; excluido?: string } }>('/', async (req, rep) => {
     const aviso = req.query.salvo ? `Bot ${req.query.salvo} salvo.` : req.query.excluido ? `Bot ${req.query.excluido} excluído.` : null
-    return html(rep, paginaProcessos(d.bots.get(), d.repo.resumoPorProcesso(), d.conexao.estado().numero, usuario(req), agora(), aviso))
+    // Todos os números de recrutamento entram aqui (mesmo desativados), para o aviso claro de cada bot.
+    const numeros = d.numeros
+      .listar()
+      .filter((n) => n.papel === 'recrutamento')
+      .map((n) => ({ id: n.id, nome: n.nome, ativo: n.ativo, telefone: n.ativo ? d.conexoes.estado(n.id)?.numero ?? null : null }))
+    return html(rep, paginaProcessos(d.bots.get(), d.repo.resumoPorProcesso(), numeros, usuario(req), agora(), aviso))
   })
 
   // --- bots ---------------------------------------------------------------------------
 
   const hoje = () => new Date(agora() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const editor = (rep: FastifyReply, req: FastifyRequest, o: Omit<Parameters<typeof paginaEditorBot>[0], 'padrao' | 'usuario'>) =>
-    html(rep, paginaEditorBot({ ...o, padrao: d.bots.padrao, usuario: usuario(req) }))
+  const editor = (
+    rep: FastifyReply,
+    req: FastifyRequest,
+    o: Omit<Parameters<typeof paginaEditorBot>[0], 'padrao' | 'usuario' | 'numeros'>
+  ) =>
+    html(
+      rep,
+      paginaEditorBot({
+        ...o,
+        padrao: d.bots.padrao,
+        usuario: usuario(req),
+        numeros: numerosRecrutamento(o.original !== null ? o.dados.numero_id : null).map(({ id, nome }) => ({ id, nome }))
+      })
+    )
 
   app.get<{ Querystring: { de?: string } }>('/bots/novo', async (req, rep) => {
     const origem = req.query.de ? d.repo.bot(req.query.de.toUpperCase()) : null
@@ -145,14 +180,18 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
       return rep.code(400).send('Formulário inválido')
     }
     try {
-      const { dados } = prepararBot(entrada, d.bots.padrao, status)
+      const numeroAtual = original ? d.repo.numeroDoBot(original) : null
+      const { dados } = prepararBot(entrada, d.bots.padrao, status, numerosRecrutamento(numeroAtual).map((n) => n.id))
       if (original && dados.codigo !== original) throw new Error('o código de um bot existente não pode mudar')
       if (original && !d.repo.bot(original)) throw new Error('bot não encontrado')
       if (!original && (d.repo.bot(dados.codigo) || d.repo.contarCandidaturas(dados.codigo) > 0)) {
         throw new Error(`o código ${dados.codigo} já foi usado; escolha outro`)
       }
+      if (original && numeroAtual !== null && numeroAtual !== dados.numero_id && d.repo.contarCandidaturas(original) > 0) {
+        throw new Error('o número de um bot com candidaturas não pode mudar')
+      }
       d.repo.transacao(() => {
-        d.repo.salvarBot(dados.codigo, JSON.stringify(dados), usuario(req), agora())
+        d.repo.salvarBot(dados.codigo, JSON.stringify(dados), dados.numero_id, usuario(req), agora())
         d.repo.auditar(usuario(req), original ? 'editar_bot' : 'criar_bot', `${dados.codigo} (${status})`, agora())
       })
       d.bots.invalidar()
@@ -221,25 +260,18 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
     return rep.redirect(`/processos/${encodeURIComponent(c.processo)}`, 303)
   })
 
-  app.get('/conexao', async (req, rep) => {
-    const e = d.conexao.estado()
-    const qr = e.qr ? await QRCode.toDataURL(e.qr, { margin: 1, width: 280 }) : null
-    return html(rep, paginaConexao(e, qr, usuario(req)))
-  })
-
-  app.post('/conexao/nova-sessao', async (req, rep) => {
-    d.repo.auditar(usuario(req), 'nova_sessao', null, agora())
-    await d.conexao.novaSessao()
-    return rep.redirect('/conexao', 303)
-  })
-
-  app.get('/saude', async (req, rep) =>
-    html(
+  app.get('/saude', async (req, rep) => {
+    const ultimas = d.repo.ultimaRecebidaPorNumero()
+    const numeros = d.numeros.listar().map((numero) => ({
+      numero,
+      estado: numero.ativo ? d.conexoes.estado(numero.id) : null,
+      ultimaMensagem: ultimas.get(numero.id) ?? null
+    }))
+    return html(
       rep,
       paginaSaude(
         {
-          conexao: d.conexao.estado(),
-          ultimaMensagem: d.repo.ultimaRecebida(),
+          numeros,
           filas: d.repo.filas(),
           ultimoBackup: d.repo.meta('ultimo_backup'),
           backupAtivo: d.backupAtivo,
@@ -249,9 +281,12 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
         usuario(req)
       )
     )
-  )
+  })
 
   app.get('/auditoria', async (req, rep) => html(rep, paginaAuditoria(d.repo.auditoriaRecente(200), usuario(req))))
+
+  rotasNumeros(app, d, { html, usuario, agora })
+  rotasEquipe(app, d, { html, usuario, agora })
 
   return app
 }

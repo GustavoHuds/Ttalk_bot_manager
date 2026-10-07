@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 
 export type Banco = Database.Database
 
-const MIGRACOES: string[] = [
+export const MIGRACOES: string[] = [
   `
   CREATE TABLE candidaturas (
     id INTEGER PRIMARY KEY,
@@ -118,6 +118,104 @@ const MIGRACOES: string[] = [
     atualizado_em INTEGER NOT NULL,
     atualizado_por TEXT NOT NULL
   );
+  `,
+  `
+  -- Números de WhatsApp. Nunca são apagados (só desativados): por isso as colunas numero_id abaixo
+  -- não têm REFERENCES (o SQLite não aceita ADD COLUMN com REFERENCES e DEFAULT 1 com as FKs ligadas).
+  CREATE TABLE numeros (
+    id INTEGER PRIMARY KEY,
+    nome TEXT NOT NULL,
+    papel TEXT NOT NULL CHECK (papel IN ('recrutamento', 'grupos')),
+    ativo INTEGER NOT NULL DEFAULT 1,
+    criado_em INTEGER NOT NULL
+  );
+  INSERT INTO numeros (id, nome, papel, ativo, criado_em) VALUES (1, 'Principal', 'recrutamento', 1, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+
+  ALTER TABLE processos ADD COLUMN numero_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE candidaturas ADD COLUMN numero_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE saida ADD COLUMN numero_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE enquetes ADD COLUMN numero_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE enviadas ADD COLUMN numero_id INTEGER NOT NULL DEFAULT 1;
+  CREATE INDEX candidaturas_numero_jid ON candidaturas (numero_id, jid);
+  CREATE INDEX saida_numero ON saida (numero_id, proxima_em);
+
+  -- A mesma pessoa pode conversar com dois números.
+  CREATE TABLE conversas_nova (
+    numero_id INTEGER NOT NULL,
+    jid TEXT NOT NULL,
+    candidatura_id INTEGER REFERENCES candidaturas (id) ON DELETE SET NULL,
+    estado TEXT,
+    ultima_recebida INTEGER NOT NULL,
+    PRIMARY KEY (numero_id, jid)
+  );
+  INSERT INTO conversas_nova (numero_id, jid, candidatura_id, estado, ultima_recebida)
+    SELECT 1, jid, candidatura_id, estado, ultima_recebida FROM conversas;
+  DROP TABLE conversas;
+  ALTER TABLE conversas_nova RENAME TO conversas;
+
+  -- O mesmo ID de mensagem chega a dois números quando os dois estão no mesmo grupo.
+  CREATE TABLE mensagens_nova (
+    numero_id INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    jid TEXT NOT NULL,
+    recebida_em INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pendente', 'processada', 'erro')),
+    tentativas INTEGER NOT NULL DEFAULT 0,
+    payload TEXT,
+    PRIMARY KEY (numero_id, id)
+  );
+  INSERT INTO mensagens_nova (numero_id, id, jid, recebida_em, status, tentativas, payload)
+    SELECT 1, id, jid, recebida_em, status, tentativas, payload FROM mensagens_processadas;
+  DROP TABLE mensagens_processadas;
+  ALTER TABLE mensagens_nova RENAME TO mensagens_processadas;
+  CREATE INDEX mensagens_pendentes ON mensagens_processadas (status) WHERE status = 'pendente';
+  `,
+  `
+  -- Bot de grupos: grupos de cada número, cadastro da equipe, gestores e caixa de saída própria.
+  CREATE TABLE grupos (
+    numero_id INTEGER NOT NULL REFERENCES numeros (id),
+    jid TEXT NOT NULL,
+    nome TEXT NOT NULL,
+    bot_admin INTEGER NOT NULL DEFAULT 0,
+    setor TEXT,
+    loja TEXT,
+    ativo INTEGER NOT NULL DEFAULT 1,
+    atualizado_em INTEGER NOT NULL,
+    PRIMARY KEY (numero_id, jid)
+  );
+
+  CREATE TABLE funcionarios (
+    id INTEGER PRIMARY KEY,
+    nome TEXT NOT NULL,
+    telefone TEXT UNIQUE,
+    lid TEXT UNIQUE,
+    setor TEXT,
+    loja TEXT,
+    cargo TEXT,
+    nascimento TEXT,
+    ativo INTEGER NOT NULL DEFAULT 1,
+    criado_em INTEGER NOT NULL,
+    atualizado_em INTEGER NOT NULL
+  );
+
+  -- Gestores valem para todos os números de grupos. Ser admin no WhatsApp não dá poder no bot.
+  CREATE TABLE gestores (
+    funcionario_id INTEGER PRIMARY KEY REFERENCES funcionarios (id) ON DELETE CASCADE,
+    adicionado_por TEXT NOT NULL,
+    adicionado_em INTEGER NOT NULL
+  );
+
+  CREATE TABLE saida_grupos (
+    id INTEGER PRIMARY KEY,
+    numero_id INTEGER NOT NULL REFERENCES numeros (id),
+    jid TEXT NOT NULL,
+    conteudo TEXT NOT NULL,
+    criada_em INTEGER NOT NULL,
+    tentativas INTEGER NOT NULL DEFAULT 0,
+    proxima_em INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX saida_grupos_numero ON saida_grupos (numero_id, proxima_em);
+  CREATE INDEX saida_grupos_jid ON saida_grupos (numero_id, jid);
   `
 ]
 
@@ -130,9 +228,10 @@ export function abrirBanco(caminho: string): Banco {
   return db
 }
 
-function migrar(db: Banco): void {
+/** Aplica as migrações que faltam, cada uma na sua transação. `alvo` serve aos testes de migração. */
+export function migrar(db: Banco, alvo = MIGRACOES.length): void {
   const versao = db.pragma('user_version', { simple: true }) as number
-  for (let v = versao; v < MIGRACOES.length; v++) {
+  for (let v = versao; v < alvo; v++) {
     db.transaction(() => {
       db.exec(MIGRACOES[v]!)
       db.pragma(`user_version = ${v + 1}`)

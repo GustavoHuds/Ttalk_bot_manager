@@ -8,7 +8,8 @@ import { botModelo } from '../src/config/bots.js'
 import { lerPadrao, montarConfig } from '../src/config/carregar.js'
 import type { CandidatoPainel } from '../src/db/repositorio.js'
 import { paginaEditorBot } from '../src/painel/editor.js'
-import { paginaConexao, paginaProcesso, paginaProcessos, paginaSaude } from '../src/painel/paginas.js'
+import { paginaProcesso, paginaProcessos, paginaSaude } from '../src/painel/paginas.js'
+import { paginaNumero } from '../src/painel/paginas-numeros.js'
 
 const saida = join(import.meta.dirname, '..', 'docs', 'img')
 mkdirSync(saida, { recursive: true })
@@ -50,18 +51,35 @@ const candidatos: CandidatoPainel[] = [
 const resumo = new Map([['VEND-OUT26', { total: 4, concluidas: 3 }]])
 const qr = await QRCode.toDataURL('demonstracao-ttalk-bot-manager', { margin: 1, width: 280 })
 
+const numeros = [{ id: 1, nome: 'Principal', ativo: true, telefone: numero }]
+
 const paginas: Record<string, string> = {
-  bots: paginaProcessos(config, resumo, numero, 'rh', agora, null),
-  editor: paginaEditorBot({ dados: vendas, padrao, original: 'VEND-OUT26', candidaturas: 4, erro: null, usuario: 'rh' }),
+  bots: paginaProcessos(config, resumo, numeros, 'rh', agora, null),
+  editor: paginaEditorBot({
+    dados: vendas,
+    padrao,
+    original: 'VEND-OUT26',
+    candidaturas: 4,
+    erro: null,
+    usuario: 'rh',
+    numeros: [{ id: 1, nome: 'Principal' }]
+  }),
   candidatos: paginaProcesso('VEND-OUT26', config.processos[0], candidatos, 'rh'),
-  conexao: paginaConexao({ status: 'aguardando_qr', qr: 'x', desde: agora, numero: null, motivo: null }, qr, 'rh').replace(
-    '<meta http-equiv="refresh" content="5">',
-    ''
-  ),
+  conexao: paginaNumero(
+    { id: 1, nome: 'Principal', papel: 'recrutamento', ativo: true, criadoEm: agora },
+    { status: 'aguardando_qr', qr: 'x', desde: agora, numero: null, motivo: null },
+    qr,
+    'rh'
+  ).replace('<meta http-equiv="refresh" content="5">', ''),
   saude: paginaSaude(
     {
-      conexao: { status: 'conectado', qr: null, desde: agora - 86400_000, numero, motivo: null },
-      ultimaMensagem: agora - 600_000,
+      numeros: [
+        {
+          numero: { id: 1, nome: 'Principal', papel: 'recrutamento', ativo: true, criadoEm: agora },
+          estado: { status: 'conectado', qr: null, desde: agora - 86400_000, numero, motivo: null },
+          ultimaMensagem: agora - 600_000
+        }
+      ],
       filas: { entrada: 0, saida: 0, erros: 0 },
       ultimoBackup: new Date(agora - 8 * 3600_000).toISOString(),
       backupAtivo: true,

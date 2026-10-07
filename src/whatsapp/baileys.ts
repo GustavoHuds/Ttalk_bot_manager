@@ -1,5 +1,5 @@
 import { cp, mkdir, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import makeWASocket, {
   Browsers,
   BufferJSON,
@@ -10,15 +10,30 @@ import makeWASocket, {
   jidNormalizedUser,
   normalizeMessageContent,
   useMultiFileAuthState,
+  type GroupMetadata,
   type WAMessage,
   type WASocket,
   proto
 } from '@whiskeysockets/baileys'
 import type { Logger } from 'pino'
 import type { MensagemRecebida } from '../conversa/orquestrador.js'
+import type { Papel } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
+import type { ConexaoGrupos, EventoGrupos, InfoGrupo, MensagemGrupo, MetadadosGrupo } from '../grupos/tipos.js'
 import type { ConexaoEnvio } from './expedidor.js'
-import { entradaDaMensagem, identidade, jidIgnorado, opcoesVotadas, paraNumero, telefoneDoJid } from './normalizar.js'
+import {
+  comandoDaMensagem,
+  entradaDaMensagem,
+  identidade,
+  infoDoGrupo,
+  jidIgnorado,
+  jidIgnoradoGrupos,
+  membrosDoGrupo,
+  opcoesVotadas,
+  paraNumero,
+  souEu,
+  telefoneDoJid
+} from './normalizar.js'
 
 export type StatusConexao = 'iniciando' | 'aguardando_qr' | 'conectado' | 'reconectando' | 'desconectado'
 
@@ -33,12 +48,18 @@ export interface EstadoConexao {
 }
 
 export interface OpcoesBaileys {
+  /** Número (tabela numeros) desta conexão. */
+  numeroId: number
+  /** Recrutamento ignora grupos; grupos só repassa comandos. */
+  papel: Papel
   pastaSessao: string
   repo: Repositorio
   log: Logger
   /** Mensagens mais velhas que isso (ao reconectar) são ignoradas. */
   janelaMs: number
   aoReceber: (m: MensagemRecebida) => void
+  aoComando?: (m: MensagemGrupo) => void
+  aoEventoGrupos?: (e: EventoGrupos) => void
   aoMudarEstado?: (e: EstadoConexao) => void
 }
 
@@ -51,12 +72,17 @@ const ESPERA_MAXIMA_MS = 5 * 60 * 1000
  * Única parte do sistema que conhece o Baileys. Trocar para Evolution API ou para
  * a API oficial é escrever outra classe com os mesmos métodos.
  */
-export class ConexaoBaileys implements ConexaoEnvio {
+export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
   private sock: WASocket | null = null
   private tentativas = 0
   private timerReconexao: NodeJS.Timeout | null = null
   private parado = false
   private estado: EstadoConexao = { status: 'iniciando', qr: null, desde: Date.now(), numero: null, motivo: null }
+  /** Evita pedir de novo os metadados de um grupo a cada envio (WhatsApp bane quem exagera). */
+  private cacheGrupos = new Map<string, GroupMetadata>()
+  /** Uma leitura de metadados por grupo de cada vez, para reabastecer o cache depois de uma mudança. */
+  private buscasGrupo = new Map<string, Promise<GroupMetadata | undefined>>()
+  private novaSessaoEmAndamento: Promise<void> | null = null
 
   constructor(private readonly o: OpcoesBaileys) {}
 
@@ -80,6 +106,7 @@ export class ConexaoBaileys implements ConexaoEnvio {
       // sem internet para consultar: usa a versão embutida no Baileys
     }
 
+    if (this.parado) return
     const logBaileys = this.o.log.child({ modulo: 'baileys' }, { level: 'warn' })
     const sock = makeWASocket({
       auth: state,
@@ -88,11 +115,12 @@ export class ConexaoBaileys implements ConexaoEnvio {
       browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      shouldIgnoreJid: (jid) => jidIgnorado(jid),
+      shouldIgnoreJid: (jid) => (this.o.papel === 'grupos' ? jidIgnoradoGrupos(jid) : jidIgnorado(jid)),
       getMessage: async (key) => {
-        const conteudo = key.id ? this.o.repo.enviada(key.id) : null
+        const conteudo = key.id ? this.o.repo.enviada(this.o.numeroId, key.id) : null
         return conteudo ? (JSON.parse(conteudo, BufferJSON.reviver) as proto.IMessage) : undefined
-      }
+      },
+      ...(this.o.papel === 'grupos' ? { cachedGroupMetadata: (jid: string) => this.grupoEmCache(jid) } : {})
     })
     this.sock = sock
 
@@ -103,18 +131,25 @@ export class ConexaoBaileys implements ConexaoEnvio {
         this.tentativas = 0
         this.mudar({ status: 'conectado', qr: null, motivo: null, numero: telefoneDoJid(jidNormalizedUser(sock.user?.id)) })
         this.o.log.info('conectado ao WhatsApp')
+        if (this.o.papel === 'grupos') void this.sincronizarGrupos()
       }
       if (u.connection === 'close') this.aoFechar(u.lastDisconnect?.error as ErroDesconexao | undefined)
     })
     sock.ev.on('messages.upsert', ({ messages, type }) => {
-      if (type !== 'notify') return
+      // Grupos: a fila represada na reconexão chega como 'append'; o orquestrador decide o que é velho demais.
+      const aceita = this.o.papel === 'grupos' ? type === 'notify' || type === 'append' : type === 'notify'
+      if (!aceita) return
       for (const msg of messages) {
-        this.tratarRecebida(msg).catch((err) => this.o.log.error({ err }, 'erro ao ler mensagem recebida'))
+        const tratar = this.o.papel === 'grupos' ? this.tratarComando(msg) : this.tratarRecebida(msg)
+        tratar.catch((err) => this.o.log.error({ err }, 'erro ao ler mensagem recebida'))
       }
     })
+    if (this.o.papel === 'grupos') this.ouvirGrupos(sock)
   }
 
   private aoFechar(erro: ErroDesconexao | undefined): void {
+    this.cacheGrupos.clear()
+    this.buscasGrupo.clear()
     const codigo = erro?.output?.statusCode
     this.sock = null
     if (this.parado) return
@@ -159,16 +194,11 @@ export class ConexaoBaileys implements ConexaoEnvio {
     const entrada = conteudo?.pollUpdateMessage ? this.lerVoto(msg) : entradaDaMensagem(msg)
     if (!entrada) return
 
-    if (!quem.telefone && quem.lid && this.sock) {
-      try {
-        const pn = await this.sock.signalRepository.lidMapping.getPNForLID(quem.lid)
-        quem.telefone = telefoneDoJid(pn ? jidNormalizedUser(pn) : null)
-      } catch {
-        // sem mapeamento: o motor pergunta o telefone no fim
-      }
-    }
+    // sem mapeamento, o motor pergunta o telefone no fim
+    if (!quem.telefone && quem.lid) quem.telefone = await this.telefoneDoLid(quem.lid)
 
     const m: MensagemRecebida = {
+      numeroId: this.o.numeroId,
       id: msg.key.id,
       jid: quem.jid,
       telefone: quem.telefone,
@@ -188,10 +218,10 @@ export class ConexaoBaileys implements ConexaoEnvio {
     const pu = normalizeMessageContent(msg.message)?.pollUpdateMessage
     const idEnquete = pu?.pollCreationMessageKey?.id
     if (!pu?.vote || !idEnquete) return null
-    const enquete = this.o.repo.enquete(idEnquete)
+    const enquete = this.o.repo.enquete(this.o.numeroId, idEnquete)
     if (!enquete) return null
 
-    const eu = [this.sock?.user?.id, this.sock?.user?.lid].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j))
+    const eu = this.eu()
     const votantes = [msg.key.remoteJid, msg.key.remoteJidAlt, msg.key.participant, msg.key.participantAlt]
       .filter((j): j is string => !!j)
       .map((j) => jidNormalizedUser(j))
@@ -214,6 +244,95 @@ export class ConexaoBaileys implements ConexaoEnvio {
     return null
   }
 
+  /** Bot de grupos: só comandos passam. A conversa comum do grupo é descartada aqui, sem tocar no banco nem no log. */
+  private async tratarComando(msg: WAMessage): Promise<void> {
+    const comando = comandoDaMensagem(msg, this.o.numeroId)
+    if (!comando) return
+    try {
+      this.o.aoComando?.(comando)
+    } catch (err) {
+      this.o.log.error({ err, id: comando.id }, 'erro ao tratar comando de grupo')
+    }
+  }
+
+  /** JIDs do próprio bot (telefone e LID), sem dispositivo. */
+  private eu(): string[] {
+    return [this.sock?.user?.id, this.sock?.user?.lid].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j))
+  }
+
+  private ouvirGrupos(sock: WASocket): void {
+    const emitir = (e: EventoGrupos) => {
+      try {
+        this.o.aoEventoGrupos?.(e)
+      } catch (err) {
+        this.o.log.error({ err, evento: e.tipo }, 'erro ao tratar evento de grupo')
+      }
+    }
+    sock.ev.on('groups.upsert', (gs) => {
+      for (const g of gs) this.cacheGrupos.set(g.id, g)
+      emitir({ tipo: 'entrou', grupos: gs.map((g) => infoDoGrupo(g, this.eu())) })
+    })
+    sock.ev.on('groups.update', (us) => {
+      for (const u of us) {
+        if (!u.id) continue
+        const anterior = this.cacheGrupos.get(u.id)
+        this.esquecerGrupo(u.id)
+        if (u.subject && anterior?.subject !== u.subject) emitir({ tipo: 'renomeado', jid: u.id, nome: u.subject })
+      }
+    })
+    sock.ev.on('group-participants.update', (u) => {
+      this.esquecerGrupo(u.id)
+      if (!u.participants.some((p) => souEu(this.eu(), p))) return
+      if (u.action === 'remove') emitir({ tipo: 'saiu', jid: u.id })
+      else if (u.action === 'promote' || u.action === 'demote') emitir({ tipo: 'admin', jid: u.id, admin: u.action === 'promote' })
+      else if (u.action === 'add') {
+        this.metadados(u.id)
+          .then((md) => emitir({ tipo: 'entrou', grupos: [md] }))
+          .catch((err) => this.o.log.warn({ err }, 'não foi possível ler o grupo novo'))
+      }
+    })
+  }
+
+  /** Tira o grupo do cache; uma leitura em andamento (de antes da mudança) não volta a gravá-lo. */
+  private esquecerGrupo(jid: string): void {
+    this.cacheGrupos.delete(jid)
+    this.buscasGrupo.delete(jid)
+  }
+
+  /**
+   * Metadados para o Baileys enviar a um grupo. Depois que uma mudança tirou o grupo do cache, lê
+   * de novo uma vez só (envios simultâneos ao mesmo grupo esperam a mesma leitura) e guarda. Em
+   * erro ou sem conexão pronta devolve undefined e o Baileys segue como faria sem cache.
+   */
+  private grupoEmCache(jid: string): Promise<GroupMetadata | undefined> {
+    const g = this.cacheGrupos.get(jid)
+    if (g) return Promise.resolve(g)
+    const sock = this.sock
+    if (!sock || !this.pronta()) return Promise.resolve(undefined)
+    const andamento = this.buscasGrupo.get(jid)
+    if (andamento) return andamento
+    const busca: Promise<GroupMetadata | undefined> = sock.groupMetadata(jid).then(
+      (md) => {
+        if (this.buscasGrupo.get(jid) === busca) this.cacheGrupos.set(jid, md)
+        return md
+      },
+      () => undefined
+    )
+    this.buscasGrupo.set(jid, busca)
+    void busca.finally(() => {
+      if (this.buscasGrupo.get(jid) === busca) this.buscasGrupo.delete(jid)
+    })
+    return busca
+  }
+
+  private async sincronizarGrupos(): Promise<void> {
+    try {
+      this.o.aoEventoGrupos?.({ tipo: 'lista', grupos: await this.listarGrupos() })
+    } catch (err) {
+      this.o.log.warn({ err }, 'não foi possível listar os grupos')
+    }
+  }
+
   // --- envio -------------------------------------------------------------------------
 
   private exigirSocket(): WASocket {
@@ -225,21 +344,50 @@ export class ConexaoBaileys implements ConexaoEnvio {
     await this.exigirSocket().sendPresenceUpdate('composing', jid)
   }
 
-  async enviarTexto(jid: string, texto: string): Promise<void> {
-    const enviada = await this.exigirSocket().sendMessage(jid, { text: texto })
+  async enviarTexto(jid: string, texto: string, mencoes?: string[]): Promise<void> {
+    const enviada = await this.exigirSocket().sendMessage(jid, mencoes?.length ? { text: texto, mentions: mencoes } : { text: texto })
     this.guardarEnviada(enviada)
+  }
+
+  async listarGrupos(): Promise<InfoGrupo[]> {
+    // sock e eu são capturados antes do await: uma desconexão no meio do caminho não pode
+    // fazer this.eu() voltar vazio e todo mundo virar "sem admin".
+    const sock = this.exigirSocket()
+    const eu = this.eu()
+    const todos = await sock.groupFetchAllParticipating()
+    const grupos = Object.values(todos)
+    for (const g of grupos) this.cacheGrupos.set(g.id, g)
+    return grupos.map((g) => infoDoGrupo(g, eu))
+  }
+
+  async metadados(jid: string): Promise<MetadadosGrupo> {
+    const sock = this.exigirSocket()
+    const eu = this.eu()
+    const g = this.cacheGrupos.get(jid) ?? (await sock.groupMetadata(jid))
+    this.cacheGrupos.set(jid, g)
+    return { ...infoDoGrupo(g, eu), membros: membrosDoGrupo(g, eu) }
+  }
+
+  async telefoneDoLid(lid: string): Promise<string | null> {
+    if (!this.sock) return null
+    try {
+      const pn = await this.sock.signalRepository.lidMapping.getPNForLID(lid)
+      return telefoneDoJid(pn ? jidNormalizedUser(pn) : null)
+    } catch {
+      return null
+    }
   }
 
   async enviarEnquete(jid: string, chave: string, pergunta: string, opcoes: string[]): Promise<void> {
     const enviada = await this.exigirSocket().sendMessage(jid, { poll: { name: pergunta, values: opcoes, selectableCount: 1 } })
     this.guardarEnviada(enviada)
     const segredo = enviada?.message?.messageContextInfo?.messageSecret
-    if (enviada?.key.id && segredo) this.o.repo.salvarEnquete(enviada.key.id, jid, chave, opcoes, segredo, Date.now())
+    if (enviada?.key.id && segredo) this.o.repo.salvarEnquete(this.o.numeroId, enviada.key.id, jid, chave, opcoes, segredo, Date.now())
     else this.o.log.warn('enquete enviada sem segredo; só respostas digitadas serão aceitas')
   }
 
   private guardarEnviada(m: WAMessage | undefined): void {
-    if (m?.key.id && m.message) this.o.repo.salvarEnviada(m.key.id, JSON.stringify(m.message, BufferJSON.replacer), Date.now())
+    if (m?.key.id && m.message) this.o.repo.salvarEnviada(this.o.numeroId, m.key.id, JSON.stringify(m.message, BufferJSON.replacer), Date.now())
   }
 
   async baixarMidia(bruto: string): Promise<Buffer> {
@@ -267,10 +415,23 @@ export class ConexaoBaileys implements ConexaoEnvio {
   /**
    * Depois de um logout, começa uma sessão nova (novo QR). A sessão antiga é
    * copiada antes, porque a migração para LID não tem volta.
+   * O gerenciador já serializa chamadas por número; isto é defesa extra contra uma
+   * segunda chamada concorrente (ex.: dois cliques no painel) apagar a pasta duas vezes.
    */
   async novaSessao(): Promise<void> {
+    if (this.novaSessaoEmAndamento) return this.novaSessaoEmAndamento
+    this.novaSessaoEmAndamento = this.trocarSessao().finally(() => {
+      this.novaSessaoEmAndamento = null
+    })
+    return this.novaSessaoEmAndamento
+  }
+
+  private async trocarSessao(): Promise<void> {
     await this.parar()
-    const copia = `${this.o.pastaSessao}-antiga-${new Date().toISOString().replace(/[:.]/g, '-')}`
+    // Fora de sessoes/: senão a cópia parece outro número e é guardada para sempre no backup.
+    const pastaAntigas = join(dirname(dirname(this.o.pastaSessao)), 'sessoes-antigas')
+    const copia = join(pastaAntigas, `${basename(this.o.pastaSessao)}-${new Date().toISOString().replace(/[:.]/g, '-')}`)
+    await mkdir(pastaAntigas, { recursive: true, mode: 0o700 })
     await cp(this.o.pastaSessao, copia, { recursive: true }).catch(() => undefined)
     await rm(this.o.pastaSessao, { recursive: true, force: true })
     this.tentativas = 0
@@ -284,8 +445,4 @@ export class ConexaoBaileys implements ConexaoEnvio {
     this.sock = null
     this.mudar({ status: 'desconectado', qr: null })
   }
-}
-
-export function pastaSessao(dados: string): string {
-  return join(dados, 'sessao')
 }

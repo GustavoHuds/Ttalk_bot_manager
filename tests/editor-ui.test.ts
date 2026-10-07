@@ -23,7 +23,8 @@ describe('editor de bots no navegador', () => {
     original: 'VEND-OUT26',
     candidaturas: 0,
     erro: null,
-    usuario: 'rh'
+    usuario: 'rh',
+    numeros: [{ id: 1, nome: 'Principal' }]
   })
 
   it('mostra as perguntas do bot e envia exatamente o que está na tela', () => {
@@ -32,7 +33,7 @@ describe('editor de bots no navegador', () => {
     const dados = enviar()
     const perguntas = dados.perguntas as { chave: string; tipo: string }[]
     expect(perguntas.map((p) => p.chave)).toEqual(['nome', 'cidade', 'disponibilidade', 'pretensao', 'curriculo'])
-    expect(() => prepararBot(dados, padrao, 'aberto')).not.toThrow()
+    expect(() => prepararBot(dados, padrao, 'aberto', [1])).not.toThrow()
   })
 
   it('campos escondidos ficam realmente escondidos (o CSS de label não anula o hidden)', () => {
@@ -72,9 +73,15 @@ describe('editor de bots no navegador', () => {
     expect(perguntas[4]!.formatos).toEqual(['pdf', 'docx', 'jpg'])
     expect(dados.mensagens).toEqual({ confirmacao: 'Valeu, {primeiro_nome}!' })
 
-    const { processo } = prepararBot(dados, padrao, 'aberto')
+    const { processo } = prepararBot(dados, padrao, 'aberto', [1])
     expect(processo.perguntas[2]!.chave).toBe('cnh')
     expect(processo.mensagens.confirmacao).toBe('Valeu, {primeiro_nome}!')
+  })
+
+  it('bot só pode ficar num número de recrutamento', () => {
+    const dados = { ...botModelo('2026-10-06'), codigo: 'X-1', vaga: 'X', encerra_em: '2026-10-31', numero_id: 3 }
+    expect(() => prepararBot(dados, padrao, 'aberto', [1, 2])).toThrow('número de recrutamento')
+    expect(prepararBot({ ...dados, numero_id: 2 }, padrao, 'aberto', [1, 2]).processo.numeroId).toBe(2)
   })
 
   it('texto com aspas e < não quebra a página', () => {
@@ -93,7 +100,8 @@ describe('editor de bots no navegador', () => {
       original: null,
       candidaturas: 0,
       erro: null,
-      usuario: 'rh'
+      usuario: 'rh',
+      numeros: [{ id: 1, nome: 'Principal' }]
     })
     const { doc, enviar } = abrir(perigoso)
     expect((doc.defaultView as unknown as { invadido?: number }).invadido).toBeUndefined()

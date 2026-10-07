@@ -25,7 +25,7 @@ Built for recruitment (candidate → questions → CV), designed to be reused fo
 
 Hiring through WhatsApp usually means a person copying names from chats and digging CVs out of a phone gallery. Off-the-shelf WhatsApp gateways solve the connection but leave you to build the conversation, the storage and the privacy rules yourself.
 
-Ttalk is the whole thing in one small process: one WhatsApp number, as many bots as you have openings, a web panel to create them, and a vault for what candidates send. No browser, no Redis, no PostgreSQL.
+Ttalk is the whole thing in one small process: one or more WhatsApp numbers (recruitment or company groups), as many bots as you have openings, a web panel to create them, and a vault for what candidates send. No browser, no Redis, no PostgreSQL.
 
 ## Features
 
@@ -40,7 +40,9 @@ Ttalk is the whole thing in one small process: one WhatsApp number, as many bots
 **Admin panel**
 - **Create, edit, copy, open and close bots** in the browser. Changes apply instantly, with no restart.
 - Candidate list per opening, file download, **ZIP export (CSV + files)** ready for AI screening.
-- Connection page with QR code, health page, full audit log (who viewed, downloaded, exported or deleted what).
+- **Numbers** page (one QR code per number), health page, full audit log (who viewed, downloaded, exported or deleted what).
+- **Several WhatsApp numbers in one process.** Each number has one role: *recruitment* (candidates) or *groups* (company groups). A ban on one never touches the other.
+- **Group bot core.** Team registry (with CSV import/export), managers, and WhatsApp commands: `/menu`, `/gestores`, `/quem`, `/cadastrar`, `/setores`, `/desconhecidos`, `/grupos`, `/gestor add|remover`, `/status`, `/log`. Only registered managers can run management commands; being a WhatsApp group admin grants nothing. Plain group chat is never stored.
 
 **Reliability** (the guarantees you would get from the official API)
 
@@ -52,7 +54,7 @@ Ttalk is the whole thing in one small process: one WhatsApp number, as many bots
 | Media can always be downloaded | Download retries plus media re-upload request when the link expires |
 | Account status is visible | `/saude` page and a data-free `/healthz` for uptime monitors |
 
-**Anti-ban behaviour**: reply-only, read receipts, "typing…" for 1 to 4 s scaled to message length, at least 1.5 s between messages per chat, 20 per minute overall, randomised greeting variants, never shown as permanently online, no history sync, exponential reconnect backoff, and a full stop on logout instead of hammering.
+**Anti-ban behaviour**: reply-only, read receipts, "typing…" for 1 to 4 s scaled to message length, at least 1.5 s between messages per chat, 20 per minute per number, randomised greeting variants, never shown as permanently online, no history sync, exponential reconnect backoff, and a full stop on logout instead of hammering.
 
 ## Screenshots
 
@@ -123,7 +125,9 @@ mkdir -p data && sudo chown 1000:1000 data   # the container runs as uid 1000
 docker compose up -d --build
 ```
 
-Open `http://127.0.0.1:3100`, sign in, go to **Conexão** and scan the QR code with WhatsApp → *Linked devices*. Then **+ Novo bot**, fill in the opening, **Abrir inscrições**, and share the link shown in the list.
+Open `http://127.0.0.1:3100`, sign in, go to **Números**, open *Principal* and scan the QR code with WhatsApp → *Linked devices*. Then **+ Novo bot**, fill in the opening, **Abrir inscrições**, and share the link shown in the list.
+
+To add the group bot: **Números → + Número** with role *Grupos*, scan the QR with that phone, add the number to your groups, then register people in **Equipe** (or import a CSV) and mark at least one manager. Managers send `/menu` to the bot in private to see what they can do.
 
 In production, publish the panel behind your reverse proxy with HTTPS:
 
@@ -161,6 +165,8 @@ npm run build && npm start
 
 Factory texts live in [`config/mensagens-padrao.yaml`](config/mensagens-padrao.yaml). Each bot can override any of them in the panel. Variables: `{empresa}`, `{vaga}`, `{primeiro_nome}`, `{protocolo}`, `{retencao_meses}`.
 
+Sessions live in `data/sessoes/<number id>/`. An existing `data/sessao/` from 1.0 is moved to `data/sessoes/1/` on the first start, no re-pairing needed.
+
 ## Security and privacy
 
 Built with Brazil's LGPD in mind (it maps well to GDPR):
@@ -171,7 +177,7 @@ Built with Brazil's LGPD in mind (it maps well to GDPR):
 - **Automatic retention**: a daily job deletes each opening's data after its retention period.
 - **Files outside any public folder**, with random names. The candidate's name lives only in the database. File signatures are checked, so a fake `cv.pdf` is rejected.
 - **Panel** behind login (scrypt hashes, signed `HttpOnly` + `SameSite=Strict` cookie, lockout after 5 failures). Every view, download, export and deletion is audited.
-- **Encrypted daily backup** (AES-256-GCM, scrypt-derived key) of database, files and session.
+- **Encrypted daily backup** (AES-256-GCM, scrypt-derived key) of database, files and sessions.
 - **Logs carry IDs only**, never message content or personal data. CSV export neutralises spreadsheet formula injection.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.

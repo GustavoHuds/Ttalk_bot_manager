@@ -8,6 +8,8 @@ import type { Acao, Contexto, Entrada } from './tipos.js'
 
 /** Mensagem recebida como o adaptador entrega ao orquestrador. */
 export interface MensagemRecebida {
+  /** Número que recebeu a mensagem. */
+  numeroId: number
   id: string
   /** Chat para onde a resposta vai (pode ser @lid). */
   jid: string
@@ -26,13 +28,13 @@ export type Envio = { tipo: 'texto'; texto: string } | { tipo: 'enquete'; chave:
 export interface DependenciasOrquestrador {
   repo: Repositorio
   config: () => ConfigCarregada
-  baixarMidia: (bruto: string) => Promise<Buffer>
+  baixarMidia: (numeroId: number, bruto: string) => Promise<Buffer>
   armazem: ArmazemArquivos
   log: Logger
   relogio?: () => number
   aleatorio?: () => number
   /** Avisado quando há algo novo na caixa de saída. */
-  aoEnfileirar?: () => void
+  aoEnfileirar?: (numeroId: number) => void
 }
 
 const MAX_TENTATIVAS = 3
@@ -53,21 +55,21 @@ export class Orquestrador {
 
   /** Grava e enfileira. Devolve false se a mensagem já tinha sido recebida. */
   receber(m: MensagemRecebida): boolean {
-    if (!this.d.repo.registrarRecebida(m.id, m.jid, m.recebidaEm, JSON.stringify(m))) return false
-    if (m.telefone || m.lid) this.d.repo.completarIdentidade(m.jid, m.telefone, m.lid)
-    this.agendar(m.jid, () => this.processarMensagem(m.id))
+    if (!this.d.repo.registrarRecebida(m.numeroId, m.id, m.jid, m.recebidaEm, JSON.stringify(m))) return false
+    if (m.telefone || m.lid) this.d.repo.completarIdentidade(m.numeroId, m.jid, m.telefone, m.lid)
+    this.agendar(m.numeroId, m.jid, () => this.processarMensagem(m.numeroId, m.id))
     return true
   }
 
   /** Reprocessa o que ficou pendente (queda do processo, erro temporário). */
   retomarPendentes(): void {
-    for (const p of this.d.repo.pendentes()) this.agendar(p.jid, () => this.processarMensagem(p.id))
+    for (const p of this.d.repo.pendentes()) this.agendar(p.numeroId, p.jid, () => this.processarMensagem(p.numeroId, p.id))
   }
 
   /** Fecha os lotes de arquivos cujo prazo de 60 s acabou. */
   verificarFinalizacoes(): void {
     for (const c of this.d.repo.paraFinalizar(this.relogio())) {
-      this.agendar(c.jid, () => this.finalizarArquivos(c.id))
+      this.agendar(c.numeroId, c.jid, () => this.finalizarArquivos(c.id))
     }
   }
 
@@ -76,27 +78,30 @@ export class Orquestrador {
     while (this.filas.size > 0) await Promise.all([...this.filas.values()])
   }
 
-  private agendar(jid: string, tarefa: () => Promise<void>): void {
-    const anterior = this.filas.get(jid) ?? Promise.resolve()
+  /** Uma fila por contato em cada número: a mesma pessoa em dois números são duas conversas. */
+  private agendar(numeroId: number, jid: string, tarefa: () => Promise<void>): void {
+    const chave = `${numeroId}:${jid}`
+    const anterior = this.filas.get(chave) ?? Promise.resolve()
     const proxima = anterior
       .then(tarefa)
       .catch((err) => this.d.log.error({ err }, 'falha inesperada na fila do contato'))
       .finally(() => {
-        if (this.filas.get(jid) === proxima) this.filas.delete(jid)
+        if (this.filas.get(chave) === proxima) this.filas.delete(chave)
       })
-    this.filas.set(jid, proxima)
+    this.filas.set(chave, proxima)
   }
 
-  private async processarMensagem(id: string): Promise<void> {
-    const pendente = this.d.repo.lerPendente(id)
+  private async processarMensagem(numeroId: number, id: string): Promise<void> {
+    const pendente = this.d.repo.lerPendente(numeroId, id)
     if (!pendente) return
-    const m = JSON.parse(pendente.payload) as MensagemRecebida
+    // Mensagens gravadas antes dos vários números não têm numeroId no conteúdo.
+    const m = { ...(JSON.parse(pendente.payload) as MensagemRecebida), numeroId }
     try {
-      await this.executar(m.jid, m.entrada, m)
+      await this.executar(numeroId, m.jid, m.entrada, m)
     } catch (err) {
       const desistir = pendente.tentativas + 1 >= MAX_TENTATIVAS
-      this.d.log.error({ err, mensagem: id, desistir }, 'erro ao processar mensagem')
-      this.d.repo.registrarFalha(id, desistir)
+      this.d.log.error({ err, mensagem: id, numero: numeroId, desistir }, 'erro ao processar mensagem')
+      this.d.repo.registrarFalha(numeroId, id, desistir)
     }
   }
 
@@ -104,19 +109,20 @@ export class Orquestrador {
     const ainda = this.d.repo.paraFinalizar(this.relogio()).find((c) => c.id === candidaturaId)
     if (!ainda) return
     try {
-      await this.executar(ainda.jid, { tipo: 'finalizar_arquivos' })
+      await this.executar(ainda.numeroId, ainda.jid, { tipo: 'finalizar_arquivos' })
     } catch (err) {
       this.d.log.error({ err, candidatura: candidaturaId }, 'erro ao finalizar arquivos')
     }
   }
 
-  private contexto(jid: string, telefone: string | null): Contexto {
+  private contexto(numeroId: number, jid: string, telefone: string | null): Contexto {
     const config = this.d.config()
-    const conversa = this.d.repo.conversa(jid)
-    const candidaturas = this.d.repo.candidaturasDoContato(jid)
+    const conversa = this.d.repo.conversa(numeroId, jid)
+    const candidaturas = this.d.repo.candidaturasDoContato(numeroId, jid)
     return {
       agora: this.relogio(),
-      processos: config.processos,
+      // Cada número só enxerga os bots dele.
+      processos: config.processos.filter((p) => p.numeroId === numeroId),
       padrao: config.padrao,
       empresa: config.empresa,
       estado: conversa?.estado ?? null,
@@ -127,8 +133,8 @@ export class Orquestrador {
     }
   }
 
-  private async executar(jid: string, entrada: Entrada, m?: MensagemRecebida): Promise<void> {
-    const ctx = this.contexto(jid, m?.telefone ?? null)
+  private async executar(numeroId: number, jid: string, entrada: Entrada, m?: MensagemRecebida): Promise<void> {
+    const ctx = this.contexto(numeroId, jid, m?.telefone ?? null)
     const acoes = processar(ctx, entrada)
     const agora = ctx.agora
 
@@ -143,16 +149,16 @@ export class Orquestrador {
         criada?.processo ?? ctx.candidaturas.find((c) => c.id === (focada?.candidaturaId ?? ctx.ativaId))?.processo
       try {
         if (!m?.bruto || !processo) throw new Error('mensagem sem mídia')
-        const dados = await this.d.baixarMidia(m.bruto)
+        const dados = await this.d.baixarMidia(numeroId, m.bruto)
         baixado = await this.d.armazem.salvar(processo, guardar.ext, entrada.mimetype, dados, agora)
       } catch (err) {
         const chave = err instanceof ErroAssinatura ? 'formato_nao_aceito' : 'erro_download'
         this.d.log.warn({ err: err instanceof ErroAssinatura ? err.message : err, mensagem: m?.id }, 'arquivo não recebido')
         this.d.repo.transacao(() => {
-          this.enfileirar(jid, { tipo: 'texto', texto: this.texto(ctx, chave) }, agora)
-          if (m) this.d.repo.marcarProcessada(m.id)
+          this.enfileirar(numeroId, jid, { tipo: 'texto', texto: this.texto(ctx, chave) }, agora)
+          if (m) this.d.repo.marcarProcessada(numeroId, m.id)
         })
-        this.d.aoEnfileirar?.()
+        this.d.aoEnfileirar?.(numeroId)
         return
       }
     }
@@ -165,21 +171,21 @@ export class Orquestrador {
         for (const a of acoes) {
           switch (a.tipo) {
             case 'enviar':
-              this.enfileirar(jid, { tipo: 'texto', texto: a.texto }, agora)
+              this.enfileirar(numeroId, jid, { tipo: 'texto', texto: a.texto }, agora)
               break
             case 'enquete':
-              this.enfileirar(jid, { tipo: 'enquete', chave: a.chave, pergunta: a.pergunta, opcoes: a.opcoes }, agora)
+              this.enfileirar(numeroId, jid, { tipo: 'enquete', chave: a.chave, pergunta: a.pergunta, opcoes: a.opcoes }, agora)
               break
             case 'estado':
-              r.definirEstado(jid, a.estado)
+              r.definirEstado(numeroId, jid, a.estado)
               break
             case 'criar_candidatura':
-              foco = r.criarCandidatura(a.processo, jid, m?.telefone ?? null, m?.lid ?? null, agora)
-              r.focar(jid, foco)
+              foco = r.criarCandidatura(numeroId, a.processo, jid, m?.telefone ?? null, m?.lid ?? null, agora)
+              r.focar(numeroId, jid, foco)
               break
             case 'focar':
               foco = a.candidaturaId
-              r.focar(jid, foco)
+              r.focar(numeroId, jid, foco)
               break
             case 'excluir_dados':
               apagar.push(...r.excluirDadosDoContato(jid, ctx.telefone))
@@ -191,7 +197,7 @@ export class Orquestrador {
               this.aplicarNaCandidatura(foco, a, agora, baixado, apagar)
           }
         }
-        if (m) r.marcarProcessada(m.id)
+        if (m) r.marcarProcessada(numeroId, m.id)
       })
     } catch (err) {
       if (baixado) await this.d.armazem.apagar(baixado.caminho)
@@ -201,7 +207,7 @@ export class Orquestrador {
     for (const caminho of apagar) {
       await this.d.armazem.apagar(caminho).catch((err) => this.d.log.error({ err }, 'falha ao apagar arquivo'))
     }
-    this.d.aoEnfileirar?.()
+    this.d.aoEnfileirar?.(numeroId)
   }
 
   private aplicarNaCandidatura(id: number, a: Acao, agora: number, baixado: NovoArquivo | null, apagar: string[]): void {
@@ -234,8 +240,8 @@ export class Orquestrador {
     }
   }
 
-  private enfileirar(jid: string, envio: Envio, agora: number): void {
-    this.d.repo.enfileirarSaida(jid, JSON.stringify(envio), agora)
+  private enfileirar(numeroId: number, jid: string, envio: Envio, agora: number): void {
+    this.d.repo.enfileirarSaida(numeroId, jid, JSON.stringify(envio), agora)
   }
 
   /** Texto de erro fora do motor, com as mensagens do processo em foco. */

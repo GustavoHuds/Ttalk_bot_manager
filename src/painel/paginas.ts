@@ -1,8 +1,10 @@
 import { situacao } from '../config/carregar.js'
 import type { ConfigCarregada, Processo } from '../config/tipos.js'
 import type { CandidatoPainel } from '../db/repositorio.js'
+import type { Numero } from '../db/numeros.js'
 import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { colunasDeResposta, dataBR } from './exportar.js'
+import { ROTULO_PAPEL } from './paginas-numeros.js'
 
 export function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -28,7 +30,7 @@ dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}dt{c
 
 export function layout(titulo: string, corpo: string, usuario: string | null, extraHead = ''): string {
   const nav = usuario
-    ? `<a href="/">Bots</a><a href="/conexao">Conexão</a><a href="/saude">Saúde</a><a href="/auditoria">Auditoria</a>
+    ? `<a href="/">Bots</a><a href="/numeros">Números</a><a href="/grupos">Grupos</a><a href="/equipe">Equipe</a><a href="/saude">Saúde</a><a href="/auditoria">Auditoria</a>
        <form method="post" action="/sair" style="margin:0"><button>Sair (${esc(usuario)})</button></form>`
     : ''
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -61,10 +63,18 @@ export function linkWaMe(numero: string, codigo: string): string {
   return `https://wa.me/${numero}?text=${encodeURIComponent(`Quero me candidatar [${codigo}]`)}`
 }
 
+/** Número de recrutamento como a lista de bots precisa: nome, se está ativo e telefone conectado. */
+export interface NumeroDosBots {
+  id: number
+  nome: string
+  ativo: boolean
+  telefone: string | null
+}
+
 export function paginaProcessos(
   config: ConfigCarregada,
   resumo: Map<string, { total: number; concluidas: number }>,
-  numero: string | null,
+  numeros: NumeroDosBots[],
   usuario: string,
   agora: number,
   aviso: string | null = null
@@ -72,12 +82,20 @@ export function paginaProcessos(
   const linhas = config.processos
     .map((p) => {
       const r = resumo.get(p.codigo) ?? { total: 0, concluidas: 0 }
-      const link = numero ? linkWaMe(numero, p.codigo) : null
+      const n = numeros.find((x) => x.id === p.numeroId)
+      const link = n?.telefone ? linkWaMe(n.telefone, p.codigo) : null
       const cod = encodeURIComponent(p.codigo)
+      const qual = numeros.length > 1 && n?.ativo ? `<br><span class="suave">${esc(n.nome)}</span>` : ''
+      const destino =
+        n && !n.ativo
+          ? `<span class="erro">número «${esc(n.nome)}» desativado</span>`
+          : link
+            ? `<code>${esc(link)}</code>`
+            : '<span class="suave">conecte o número para gerar</span>'
       return `<tr><td><strong>${esc(p.vaga)}</strong><br><span class="suave">${esc(p.codigo)}</span></td>
         <td>${ROTULO_SITUACAO[situacao(p, agora)]}</td><td>${periodo(p)}</td>
         <td><a href="/processos/${cod}">${r.concluidas} concluídas</a><br><span class="suave">${r.total - r.concluidas} incompletas</span></td>
-        <td>${link ? `<code>${esc(link)}</code>` : '<span class="suave">conecte o WhatsApp para gerar</span>'}</td>
+        <td>${destino}${qual}</td>
         <td style="white-space:nowrap"><a class="botao" href="/bots/${cod}">Editar</a> <a class="botao" href="/bots/novo?de=${cod}">Copiar</a></td></tr>`
     })
     .join('')
@@ -88,12 +106,15 @@ export function paginaProcessos(
   const orfaos = semBot.length
     ? `<div class="cartao"><h2 class="alerta">Candidaturas de bots excluídos</h2><p>A retenção automática não se aplica a elas: ${semBot.map((c) => `<a href="/processos/${encodeURIComponent(c)}">${esc(c)}</a>`).join(', ')}</p></div>`
     : ''
-  const abertos = config.processos.filter((p) => situacao(p, agora) === 'aberto').length
-  const direto = numero
-    ? `<p class="suave">Contato direto pelo número (<code>https://wa.me/${esc(numero)}</code>): ${
+  const direto = numeros
+    .filter((n): n is NumeroDosBots & { telefone: string } => !!n.telefone)
+    .map((n) => {
+      const abertos = config.processos.filter((p) => p.numeroId === n.id && situacao(p, agora) === 'aberto').length
+      const destino =
         abertos === 1 ? 'vai para o único bot aberto.' : abertos > 1 ? 'o candidato escolhe a vaga numa enquete.' : 'responde que não há inscrições abertas.'
-      }</p>`
-    : ''
+      return `<p class="suave">Contato direto pelo ${esc(n.nome)} (<code>https://wa.me/${esc(n.telefone)}</code>): ${destino}</p>`
+    })
+    .join('')
   return layout(
     'Bots',
     `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h1>Bots de recrutamento</h1>
@@ -127,7 +148,7 @@ export function paginaProcesso(codigo: string, p: Processo | undefined, candidat
   )
 }
 
-const ROTULO_STATUS: Record<string, string> = {
+export const ROTULO_STATUS: Record<string, string> = {
   iniciando: 'iniciando',
   aguardando_qr: 'aguardando leitura do QR',
   conectado: 'conectado',
@@ -135,31 +156,14 @@ const ROTULO_STATUS: Record<string, string> = {
   desconectado: 'desconectado'
 }
 
-export function paginaConexao(e: EstadoConexao, qrImagem: string | null, usuario: string): string {
-  const cor = e.status === 'conectado' ? 'ok' : e.status === 'desconectado' ? 'erro' : 'alerta'
-  const corpo = `<h1>Conexão com o WhatsApp</h1><div class="cartao"><dl>
-      <dt>Status</dt><dd class="${cor}">${esc(ROTULO_STATUS[e.status])}</dd>
-      <dt>Desde</dt><dd>${esc(dataBR(e.desde))}</dd>
-      <dt>Número</dt><dd>${esc(e.numero ?? '—')}</dd>
-      ${e.motivo ? `<dt>Motivo</dt><dd class="erro">${esc(e.motivo)}</dd>` : ''}</dl></div>
-    ${
-      qrImagem
-        ? `<div class="cartao"><p>No celular do RH: WhatsApp → <strong>Aparelhos conectados</strong> → <strong>Conectar aparelho</strong>, e aponte para o código. Ele muda a cada poucos segundos; a página atualiza sozinha.</p>
-           <img src="${qrImagem}" alt="QR code de conexão" width="280" height="280" style="background:#fff;padding:8px;border-radius:8px"></div>`
-        : ''
-    }
-    ${
-      e.status === 'desconectado'
-        ? `<form method="post" action="/conexao/nova-sessao" onsubmit="return confirm('Começar uma sessão nova? A sessão atual é copiada antes.')"><button class="primario">Gerar novo QR</button></form>`
-        : ''
-    }`
-  const refresh = e.status === 'conectado' ? '' : '<meta http-equiv="refresh" content="5">'
-  return layout('Conexão', corpo, usuario, refresh)
+export interface SaudeNumero {
+  numero: Numero
+  estado: EstadoConexao | null
+  ultimaMensagem: number | null
 }
 
 export interface DadosSaude {
-  conexao: EstadoConexao
-  ultimaMensagem: number | null
+  numeros: SaudeNumero[]
   filas: { entrada: number; saida: number; erros: number }
   ultimoBackup: string | null
   backupAtivo: boolean
@@ -169,9 +173,16 @@ export interface DadosSaude {
 
 export function paginaSaude(d: DadosSaude, usuario: string): string {
   const fila = d.filas.entrada + d.filas.saida
-  const corpo = `<h1>Saúde do bot</h1><div class="cartao"><dl>
-    <dt>Conexão</dt><dd class="${d.conexao.status === 'conectado' ? 'ok' : 'erro'}">${esc(ROTULO_STATUS[d.conexao.status])} desde ${esc(dataBR(d.conexao.desde))}</dd>
-    <dt>Última mensagem recebida</dt><dd>${esc(d.ultimaMensagem ? dataBR(d.ultimaMensagem) : 'nenhuma ainda')}</dd>
+  const numeros = d.numeros
+    .map(({ numero: n, estado: e, ultimaMensagem }) => {
+      const cor = !n.ativo ? 'suave' : e?.status === 'conectado' ? 'ok' : 'erro'
+      const status = !n.ativo ? 'desativado' : `${esc(ROTULO_STATUS[e?.status ?? 'iniciando'])}${e ? ` desde ${esc(dataBR(e.desde))}` : ''}`
+      return `<dt>${esc(n.nome)} <span class="suave">(${ROTULO_PAPEL[n.papel]})</span></dt>
+        <dd><span class="${cor}">${status}</span> · última mensagem: ${esc(ultimaMensagem ? dataBR(ultimaMensagem) : 'nenhuma')}</dd>`
+    })
+    .join('')
+  const corpo = `<h1>Saúde do bot</h1><div class="cartao"><h2 style="margin-top:0">Números</h2><dl>${numeros}</dl></div>
+  <div class="cartao"><dl>
     <dt>Fila</dt><dd class="${fila === 0 ? 'ok' : 'alerta'}">${d.filas.entrada} a processar · ${d.filas.saida} a enviar</dd>
     <dt>Mensagens com erro</dt><dd class="${d.filas.erros ? 'erro' : 'ok'}">${d.filas.erros}</dd>
     <dt>Último backup</dt><dd class="${d.backupAtivo ? '' : 'erro'}">${d.backupAtivo ? esc(d.ultimoBackup ? dataBR(Date.parse(d.ultimoBackup)) : 'ainda não rodou') : 'desativado (defina BACKUP_SENHA)'}</dd>

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ArmazemArquivos } from '../src/arquivos.js'
+import type { Processo } from '../src/config/tipos.js'
 import { ESPERA_ARQUIVOS_MS } from '../src/conversa/motor.js'
 import { Orquestrador, type MensagemRecebida } from '../src/conversa/orquestrador.js'
 import type { Entrada } from '../src/conversa/tipos.js'
@@ -17,17 +18,19 @@ describe('fluxo completo com banco', () => {
   let orq: Orquestrador
   let midias: Map<string, Buffer | Error>
   let seq = 0
+  let processos: Processo[]
 
   beforeEach(() => {
     t = AGORA
     seq = 0
+    processos = [processo()]
     repo = new Repositorio(abrirBanco(':memory:'))
     armazem = new ArmazemArquivos(pastaTemp())
     midias = new Map()
     orq = new Orquestrador({
       repo,
-      config: () => config([processo()]),
-      baixarMidia: async (bruto) => {
+      config: () => config(processos),
+      baixarMidia: async (_numeroId, bruto) => {
         const m = midias.get(bruto)
         if (!m || m instanceof Error) throw m ?? new Error('sem mídia')
         return m
@@ -41,7 +44,7 @@ describe('fluxo completo com banco', () => {
 
   function msg(entrada: Entrada, extra: Partial<MensagemRecebida> = {}): MensagemRecebida {
     seq++
-    return { id: `M${seq}`, jid: JID, telefone: '5583999990000', lid: null, recebidaEm: t, entrada, ...extra }
+    return { numeroId: 1, id: `M${seq}`, jid: JID, telefone: '5583999990000', lid: null, recebidaEm: t, entrada, ...extra }
   }
 
   async function enviar(entrada: Entrada, extra: Partial<MensagemRecebida> = {}) {
@@ -59,10 +62,10 @@ describe('fluxo completo com banco', () => {
   }
 
   /** Drena a caixa de saída como o expedidor faria e devolve os textos. */
-  function saida(): string[] {
+  function saida(numeroId = 1): string[] {
     const textos: string[] = []
     for (;;) {
-      const item = repo.proximaSaida(JID)
+      const item = repo.proximaSaida(numeroId, JID)
       if (!item) return textos
       const e = JSON.parse(item.conteudo) as { tipo: string; texto?: string; pergunta?: string }
       textos.push(e.texto ?? `[enquete] ${e.pergunta}`)
@@ -123,7 +126,7 @@ describe('fluxo completo com banco', () => {
 
   it('mensagem pendente (queda no meio) é reprocessada ao retomar', async () => {
     const m = msg({ tipo: 'texto', texto: '[VEND-OUT26]' })
-    repo.registrarRecebida(m.id, m.jid, m.recebidaEm, JSON.stringify(m))
+    repo.registrarRecebida(1, m.id, m.jid, m.recebidaEm, JSON.stringify(m))
     expect(repo.filas().entrada).toBe(1)
     orq.retomarPendentes()
     await orq.ocioso()
@@ -198,5 +201,16 @@ describe('fluxo completo com banco', () => {
     // Depois de excluir, pode se candidatar de novo do zero.
     await enviar({ tipo: 'texto', texto: 'oi' })
     expect(saida()[2]).toBe('Para começar, qual é o seu nome completo?')
+  })
+
+  it('dois números de recrutamento não dividem a conversa', async () => {
+    processos = [processo(), processo({ codigo: 'CAIXA-NOV26', vaga: 'Operador(a) de caixa', numero_id: 2 })]
+    await enviar({ tipo: 'texto', texto: 'oi' })
+    await enviar({ tipo: 'texto', texto: 'oi' }, { numeroId: 2 })
+    expect(repo.candidaturasDoContato(1, JID).map((c) => c.processo)).toEqual(['VEND-OUT26'])
+    expect(repo.candidaturasDoContato(2, JID).map((c) => c.processo)).toEqual(['CAIXA-NOV26'])
+    expect(repo.conversa(1, JID)!.candidaturaId).not.toBe(repo.conversa(2, JID)!.candidaturaId)
+    expect(saida(2).join('\n')).toContain('Operador(a) de caixa')
+    expect(saida(1).join('\n')).toContain('Vendedor(a) de loja')
   })
 })

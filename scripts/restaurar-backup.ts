@@ -1,5 +1,5 @@
 // Uso: BACKUP_SENHA=... npm run restaurar-backup -- <arquivo.tar.gz.enc> <pasta-destino>
-// Extrai banco.sqlite (em backups/.tmp-*/), curriculos/ e sessao/ na pasta destino.
+// Extrai banco.sqlite (em backups/.tmp-*/), curriculos/ e sessoes/ na pasta destino.
 // Restaure numa pasta separada e só depois troque a pasta data/ com o bot parado.
 import { restaurarBackup } from '../src/rotinas/backup.js'
 

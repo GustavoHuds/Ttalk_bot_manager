@@ -2,6 +2,7 @@ import { ZipArchive } from 'archiver'
 import type { Readable } from 'node:stream'
 import type { ArmazemArquivos } from '../arquivos.js'
 import type { Processo } from '../config/tipos.js'
+import type { Funcionario } from '../db/grupos.js'
 import type { CandidatoPainel } from '../db/repositorio.js'
 
 /** Excel interpreta =, +, -, @ no início como fórmula; o apóstrofo neutraliza. */
@@ -45,6 +46,27 @@ export function gerarCsv(p: Processo | undefined, candidatos: CandidatoPainel[])
       .join(';')
   )
   return '﻿' +[cabecalho.map(celula).join(';'), ...linhas].join('\r\n') + '\r\n'
+}
+
+/**
+ * Telefone como a importação espera de volta: brasileiro sem o "+" (telefoneDigitado assume o Brasil
+ * quando não há "+"); estrangeiro com "+" na frente, para a reimportação saber que não é um DDD daqui.
+ * O "+" vira fórmula para o Excel; `celula` neutraliza com um apóstrofo, que `telefoneDigitado` ignora.
+ */
+function telefoneExport(t: string | null): string {
+  if (!t) return ''
+  return /^55\d{10,11}$/.test(t) ? t : `+${t}`
+}
+
+/** Equipe no mesmo formato que a importação lê, com gestor e situação no fim. */
+export function gerarCsvEquipe(funcionarios: Funcionario[], gestores: Set<number>): string {
+  const cabecalho = ['nome', 'telefone', 'setor', 'loja', 'cargo', 'nascimento', 'gestor', 'ativo']
+  const linhas = funcionarios.map((f) =>
+    [f.nome, telefoneExport(f.telefone), f.setor ?? '', f.loja ?? '', f.cargo ?? '', f.nascimento ?? '', gestores.has(f.id) ? 'sim' : 'não', f.ativo ? 'sim' : 'não']
+      .map(celula)
+      .join(';')
+  )
+  return '﻿' + [cabecalho.map(celula).join(';'), ...linhas].join('\r\n') + '\r\n'
 }
 
 export function gerarZip(p: Processo | undefined, candidatos: CandidatoPainel[], armazem: ArmazemArquivos): Readable {

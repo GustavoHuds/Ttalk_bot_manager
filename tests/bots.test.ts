@@ -20,7 +20,7 @@ describe('bots no banco', () => {
 
   it('bot com dado inválido fica de fora e aparece como erro', () => {
     const repo = new Repositorio(abrirBanco(':memory:'))
-    repo.salvarBot('X-1', JSON.stringify({ codigo: 'X-1', vaga: 'X' }), 'teste', AGORA)
+    repo.salvarBot('X-1', JSON.stringify({ codigo: 'X-1', vaga: 'X' }), 1, 'teste', AGORA)
     const c = new FonteBots(repo, lerPadrao(CONFIG)).get()
     expect(c.processos).toEqual([])
     expect(c.erros[0]).toMatch(/^bot X-1:/)
@@ -32,5 +32,15 @@ describe('bots no banco', () => {
     expect(gerarChave('Telefone?', usadas)).toBe('telefone_2')
     expect(gerarChave('Você tem CNH?', usadas)).toBe('cnh')
     expect(gerarChave('???', usadas)).toBe('pergunta')
+  })
+
+  it('o número do bot vem da coluna, não do JSON', () => {
+    const repo = new Repositorio(abrirBanco(':memory:'))
+    const fonte = new FonteBots(repo, lerPadrao(CONFIG))
+    fonte.importarYaml(lerYamlProcessos(CONFIG), AGORA)
+    const bruto = JSON.parse(repo.bot('VEND-OUT26')!)
+    repo.salvarBot('VEND-OUT26', JSON.stringify({ ...bruto, numero_id: 9 }), 2, 'teste', AGORA)
+    fonte.invalidar()
+    expect(fonte.get().processos[0]!.numeroId).toBe(2)
   })
 })
