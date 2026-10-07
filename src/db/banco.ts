@@ -215,6 +215,7 @@ export const MIGRACOES: string[] = [
     proxima_em INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX saida_grupos_numero ON saida_grupos (numero_id, proxima_em);
+  CREATE INDEX saida_grupos_jid ON saida_grupos (numero_id, jid);
   `
 ]
 

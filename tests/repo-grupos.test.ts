@@ -78,5 +78,21 @@ describe('repositório do bot de grupos', () => {
     g.removerSaida(primeiro.id)
     expect(g.proximaSaida(N, 'a@g.us')!.conteudo).toBe('{"n":2}')
     expect(repo.filas().saida).toBe(2)
+
+    // duas filas no mesmo número: uma com a cabeça adiada, outra pronta — só a pronta volta.
+    g.enfileirarSaida(N, 'd@g.us', '{"n":4}', AGORA)
+    const segundo = g.proximaSaida(N, 'a@g.us')!
+    g.adiarSaida(segundo.id, AGORA + 9000)
+    expect(g.jidsComSaida(N, AGORA)).toEqual(['d@g.us'])
+    // passado o horário do reenvio, a fila adiada volta a aparecer.
+    expect(g.jidsComSaida(N, AGORA + 9000)).toEqual(['a@g.us', 'd@g.us'])
+  })
+
+  it('salvarFuncionario com id inexistente lança erro', () => {
+    expect(() => g.salvarFuncionario(999, ANA, AGORA)).toThrow('funcionário não encontrado')
+  })
+
+  it('enfileirarSaida com número inexistente lança erro (FK)', () => {
+    expect(() => g.enfileirarSaida(99, 'x@g.us', '{}', AGORA)).toThrow()
   })
 })

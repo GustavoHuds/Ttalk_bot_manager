@@ -85,6 +85,7 @@ const funcionarioDe = (l: LinhaFuncionario): Funcionario => ({
 })
 
 const COLUNAS_FUNCIONARIO = `id, nome, telefone, lid, setor, loja, cargo, nascimento, ativo`
+const COLUNAS_GRUPO = `numero_id, jid, nome, bot_admin, setor, loja, ativo, atualizado_em`
 
 /** Grupos, equipe, gestores e caixa de saída do bot de grupos. Usa o mesmo banco (e as mesmas transações) do Repositorio. */
 export class RepoGrupos {
@@ -95,19 +96,25 @@ export class RepoGrupos {
   /** Grupos onde o bot está, neste número. */
   grupos(numeroId: number): Grupo[] {
     return (
-      this.db.prepare(`SELECT * FROM grupos WHERE numero_id = ? AND ativo = 1 ORDER BY nome COLLATE NOCASE`).all(numeroId) as LinhaGrupo[]
+      this.db
+        .prepare(`SELECT ${COLUNAS_GRUPO} FROM grupos WHERE numero_id = ? AND ativo = 1 ORDER BY nome COLLATE NOCASE`)
+        .all(numeroId) as LinhaGrupo[]
     ).map(grupoDe)
   }
 
   /** Todos, de todos os números, inclusive os que o bot deixou (para o painel). */
   todosGrupos(): Grupo[] {
     return (
-      this.db.prepare(`SELECT * FROM grupos ORDER BY numero_id, ativo DESC, nome COLLATE NOCASE`).all() as LinhaGrupo[]
+      this.db
+        .prepare(`SELECT ${COLUNAS_GRUPO} FROM grupos ORDER BY numero_id, ativo DESC, nome COLLATE NOCASE`)
+        .all() as LinhaGrupo[]
     ).map(grupoDe)
   }
 
   grupo(numeroId: number, jid: string): Grupo | null {
-    const l = this.db.prepare(`SELECT * FROM grupos WHERE numero_id = ? AND jid = ?`).get(numeroId, jid) as LinhaGrupo | undefined
+    const l = this.db.prepare(`SELECT ${COLUNAS_GRUPO} FROM grupos WHERE numero_id = ? AND jid = ?`).get(numeroId, jid) as
+      | LinhaGrupo
+      | undefined
     return l ? grupoDe(l) : null
   }
 
@@ -138,9 +145,13 @@ export class RepoGrupos {
       .run(agora, numeroId, jid)
   }
 
-  /** Depois de reler a lista completa do WhatsApp: o que não veio é grupo de onde o bot saiu. */
+  /**
+   * Depois de reler a lista completa do WhatsApp: o que não veio é grupo de onde o bot saiu.
+   * Quem chama já roda isto dentro de uma transação.
+   */
   desativarAusentes(numeroId: number, presentes: string[], agora: number): number {
-    const sairam = this.grupos(numeroId).filter((g) => !presentes.includes(g.jid))
+    const presentesSet = new Set(presentes)
+    const sairam = this.grupos(numeroId).filter((g) => !presentesSet.has(g.jid))
     for (const g of sairam) this.desativarGrupo(numeroId, g.jid, agora)
     return sairam.length
   }
@@ -172,7 +183,10 @@ export class RepoGrupos {
     return l ? funcionarioDe(l) : null
   }
 
-  /** Cria (id null) ou substitui todos os campos. Telefone ou LID repetidos violam UNIQUE e lançam erro. */
+  /**
+   * Cria (id null) ou substitui todos os campos. Telefone ou LID repetidos violam UNIQUE e lançam erro.
+   * Lança erro também se `id` não existir.
+   */
   salvarFuncionario(id: number | null, d: DadosFuncionario, agora: number): number {
     const valores = [d.nome, d.telefone, d.lid, d.setor, d.loja, d.cargo, d.nascimento, d.ativo ? 1 : 0]
     if (id === null) {
@@ -184,12 +198,13 @@ export class RepoGrupos {
         .run(...valores, agora, agora)
       return Number(r.lastInsertRowid)
     }
-    this.db
+    const r = this.db
       .prepare(
         `UPDATE funcionarios SET nome = ?, telefone = ?, lid = ?, setor = ?, loja = ?, cargo = ?, nascimento = ?, ativo = ?,
            atualizado_em = ? WHERE id = ?`
       )
       .run(...valores, agora, id)
+    if (r.changes !== 1) throw new Error('funcionário não encontrado')
     return id
   }
 
