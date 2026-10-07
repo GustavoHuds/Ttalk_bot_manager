@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Vários números de WhatsApp no mesmo processo, cada um com um uso (recrutamento ou grupos). Página **Números** substitui **Conexão**; `/healthz` só responde ok com todos os números ativos conectados; `/saude` mostra cada número; alertas dizem qual número caiu.
+- Cada bot de recrutamento escolhe o seu número. Conversas, filas e candidaturas ficam separadas por número.
+- Bot de grupos (núcleo): cadastro da equipe com importação/exportação CSV, gestores, grupos com setor e loja, e os comandos `/menu`, `/gestores`, `/quem`, `/cadastrar`, `/setores`, `/desconhecidos`, `/grupos`, `/gestor`, `/status`, `/log`. Toda ação de gestão é auditada.
+- Atualização: o banco migra sozinho (tudo vai para o número 1) e `data/sessao` vira `data/sessoes/1` sem ler o QR de novo. O backup passa a incluir `data/sessoes/`.
+
 ## 1.0.0 — 2026-10-06
 
 First public release.

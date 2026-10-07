@@ -75,12 +75,13 @@ bots.<dominio> {
 
 (se o Caddy roda em container, use o nome do serviço na rede do Docker em vez de `127.0.0.1`). O painel tem login próprio; colocar também atrás do Authelia é opcional.
 
-Para o Uptime Kuma: monitor HTTP em `/healthz` (público, responde `{"ok":true}` com 200 quando conectado e 503 quando não, sem nenhum dado).
+Para o Uptime Kuma: monitor HTTP em `/healthz` (público, responde `{"ok":true}` com 200 quando todos os números ativos estão conectados e 503 quando não, sem nenhum dado).
 
 ## Operação
 
-- **Primeira conexão:** painel → *Conexão* → no celular do número do bot, *Aparelhos conectados* → *Conectar aparelho* → ler o QR.
-- **Se o celular desconectar o aparelho** (logout): o bot para, avisa por e-mail e a página *Conexão* oferece "Gerar novo QR". A sessão antiga é copiada para `data/sessao-antiga-*` antes.
+- **Números:** painel → *Números*. Cada número tem um uso só: *Recrutamento* (candidatos) ou *Grupos* (grupos da empresa). Para conectar: abrir o número → no celular dele, *Aparelhos conectados* → *Conectar aparelho* → ler o QR.
+- **Se o celular desconectar o aparelho** (logout): o bot para aquele número, avisa por e-mail dizendo qual, e a página do número oferece "Gerar novo QR". A sessão antiga é copiada para `data/sessoes-antigas/<id>-<data-hora>` antes.
+- **Bot de grupos:** cadastre a equipe em *Equipe* (ou importe um CSV `nome;telefone;setor;loja;cargo;nascimento`), marque pelo menos um gestor e adicione o número de grupos aos grupos. Comandos: `/menu`. Só gestores cadastrados mandam comandos de gestão; ser admin do grupo no WhatsApp não dá poder no bot. Conversa comum dos grupos nunca é gravada.
 - **Toda semana:** página *Saúde* — conexão, fila zerada, último backup.
 - **Depois do processo:** *Encerrar inscrições* no editor do bot e *Exportar ZIP* (CSV + currículos) para a triagem com IA.
 - **Excluir candidato:** botão na lista do processo, ou o próprio candidato escreve "excluir meus dados" e confirma com SIM.
@@ -88,7 +89,7 @@ Para o Uptime Kuma: monitor HTTP em `/healthz` (público, responde `{"ok":true}`
 
 ### Backup
 
-Com `BACKUP_SENHA` definido, todo dia às 3h é gerado `data/backups/backup-AAAA-MM-DD.tar.gz.enc` (banco, currículos e sessão, cifrado com AES-256-GCM). Ele fica no mesmo disco: **copie a pasta `data/backups/` para fora da VPS** periodicamente. Sem a senha, o backup não abre — guarde-a fora da VPS também.
+Com `BACKUP_SENHA` definido, todo dia às 3h é gerado `data/backups/backup-AAAA-MM-DD.tar.gz.enc` (banco, currículos e sessões, cifrado com AES-256-GCM). Ele fica no mesmo disco: **copie a pasta `data/backups/` para fora da VPS** periodicamente. Sem a senha, o backup não abre — guarde-a fora da VPS também.
 
 Restaurar (numa pasta separada, com o bot parado):
 
@@ -104,7 +105,7 @@ Com `SMTP_URL` e `ALERTA_EMAIL_PARA`, o bot manda e-mail quando a conexão fica 
 
 ### Atualizar o Baileys
 
-1. Copie `data/sessao/` (a migração para LID não tem volta).
+1. Copie `data/sessoes/` (a migração para LID não tem volta).
 2. Troque a versão exata no `package.json` (sem `^`), `npm install`, `npm test`.
 3. Rode o fluxo completo com um chip de teste antes de subir em produção.
 
