@@ -1,6 +1,7 @@
 import { semAcento } from '../conversa/textos.js'
 import type { DadosFuncionario, Funcionario } from '../db/grupos.js'
-import { COMANDOS, acharComando, type Comando, type DefComando } from './comandos.js'
+import { texto, type Personalizado } from './catalogo.js'
+import { COMANDOS, acharComando, type Comando, type DefComando, type NomeComando } from './comandos.js'
 import { acharFuncionario, formatarTelefone, telefoneDigitado, usuarioDoJid } from './pessoas.js'
 import type { AcaoGrupo, ContextoGrupos, Pessoa } from './tipos.js'
 
@@ -51,17 +52,66 @@ function separarTelefone(texto: string): { pessoa: Pessoa | null; resto: string 
 export function processarComando(ctx: ContextoGrupos, cmd: Comando): AcaoGrupo[] {
   const autor = acharFuncionario(ctx.funcionarios, ctx.remetente)
   const gestor = !!autor && autor.ativo && ctx.gestores.has(autor.id)
+  const def = acharComando(cmd.nome)
+  // /confirmar é o único comando de quem ainda não tem poder nenhum (o gestor indicado).
+  if (def?.nome === 'confirmar') return confirmar(ctx, cmd)
   // No privado só gestores são atendidos: um estranho escrevendo para o número não recebe nada.
   if (!ctx.ehGrupo && !gestor) return []
-  const def = acharComando(cmd.nome)
-  if (!def) return gestor ? responder('Não reconheço esse comando. Veja /menu.') : []
+  if (!def) {
+    const p = ctx.comandos.personalizados.find((x) => x.nome === cmd.nome)
+    if (p) return personalizado(ctx, p, gestor)
+    return gestor ? responder('Não reconheço esse comando. Veja /menu.') : []
+  }
   // Comando de gestor vindo de outra pessoa: silêncio, para o bot não virar ferramenta de spam no grupo.
   if (def.gestor && !gestor) return []
-  if (def.onde === 'grupo' && !ctx.ehGrupo) return responder(`O /${def.nome} funciona dentro de um grupo.`)
-  if (def.onde === 'privado' && ctx.ehGrupo) return responder(`Use /${def.nome} no privado comigo.`)
+  if (ctx.comandos.desligados.has(def.nome)) return gestor ? responder('Este comando está desligado neste bot.') : []
+  const fora = foraDoLugar(def.nome, def.onde, ctx.ehGrupo)
+  if (fora) return fora
   if (def.precisaAdmin && !ctx.grupo?.botAdmin) return responder('Preciso ser admin deste grupo para isso.')
   if (def.precisaMembros && !ctx.membros) return responder('Não consegui ler os participantes agora. Tente de novo em instantes.')
   return new Execucao(ctx, cmd, def, gestor).rodar()
+}
+
+function foraDoLugar(nome: string, onde: 'grupo' | 'privado' | 'ambos', ehGrupo: boolean): AcaoGrupo[] | null {
+  if (onde === 'grupo' && !ehGrupo) return responder(`O /${nome} funciona dentro de um grupo.`)
+  if (onde === 'privado' && ehGrupo) return responder(`Use /${nome} no privado comigo.`)
+  return null
+}
+
+function personalizado(ctx: ContextoGrupos, p: Personalizado, gestor: boolean): AcaoGrupo[] {
+  if (p.quem === 'gestores' && !gestor) return []
+  return foraDoLugar(p.nome, p.onde, ctx.ehGrupo) ?? responder(p.resposta)
+}
+
+/**
+ * "/confirmar 123456" no privado: o código liga o WhatsApp de quem mandou ao gestor indicado — mas só
+ * se for o mesmo WhatsApp do cadastro (telefone ou LID). Código certo vindo de outro WhatsApp não dá
+ * poder: fica guardado como divergência para alguém conferir no painel (é assim que um telefone
+ * digitado errado aparece). No grupo, nunca olha o código: só manda usar no privado.
+ */
+function confirmar(ctx: ContextoGrupos, cmd: Comando): AcaoGrupo[] {
+  if (ctx.ehGrupo) return responder('Use /confirmar no privado comigo.')
+  const codigo = cmd.args.replace(/\D/g, '')
+  const pendente = /^\d{6}$/.test(codigo)
+    ? ctx.pendentes.find((p) => p.codigo === codigo && p.expiraEm !== null && p.expiraEm > ctx.agora)
+    : undefined
+  const f = pendente ? ctx.funcionarios.find((x) => x.id === pendente.funcionarioId) : undefined
+  if (!f) return [{ tipo: 'codigo_errado' }, ...responder(texto(ctx.comandos, 'confirmar', 'invalido'))]
+  const r = ctx.remetente
+  const mesmo = (!!r.telefone && f.telefone === r.telefone) || (!!r.lid && f.lid === r.lid)
+  if (mesmo) {
+    return [
+      { tipo: 'confirmar_gestor', funcionarioId: f.id, pessoa: r },
+      { tipo: 'auditar', acao: 'gestor_confirmado', detalhe: `${f.nome} no ${ctx.bot.nome}`, funcionarioId: f.id },
+      ...responder(texto(ctx.comandos, 'confirmar', 'confirmado', { nome: f.nome, bot: ctx.bot.nome }))
+    ]
+  }
+  const origem = r.telefone ? formatarTelefone(r.telefone) : 'contato sem telefone visível'
+  return [
+    { tipo: 'divergencia', funcionarioId: f.id, pessoa: r },
+    { tipo: 'auditar', acao: 'gestor_divergente', detalhe: `${f.nome} no ${ctx.bot.nome}: veio de ${origem}`, funcionarioId: f.id },
+    ...responder(`Recebido. Este WhatsApp é diferente do cadastro de ${f.nome}; quem administra o painel precisa conferir.`)
+  ]
 }
 
 class Execucao {
@@ -95,11 +145,17 @@ class Execucao {
         return this.status()
       case 'log':
         return this.log()
+      case 'confirmar':
+        return confirmar(this.ctx, this.cmd)
       default: {
         const faltando: never = nome
         throw new Error(`comando sem regra: ${String(faltando)}`)
       }
     }
+  }
+
+  private t(chave: string, valores?: Record<string, string | number>): string {
+    return texto(this.ctx.comandos, this.def.nome as NomeComando, chave, valores)
   }
 
   private uso(): AcaoGrupo[] {
@@ -120,10 +176,14 @@ class Execucao {
 
   private menu(): AcaoGrupo[] {
     const aqui = this.ctx.ehGrupo ? 'grupo' : 'privado'
-    const linhas = COMANDOS.filter((d) => (this.gestor || !d.gestor) && (d.onde === 'ambos' || d.onde === aqui)).map(
-      (d) => `${d.uso} — ${d.descricao}`
-    )
-    return responder(`📖 Comandos\n${linhas.join('\n')}`)
+    const vale = (onde: 'grupo' | 'privado' | 'ambos') => onde === 'ambos' || onde === aqui
+    const prontos = COMANDOS.filter(
+      (d) => !d.oculto && !this.ctx.comandos.desligados.has(d.nome) && (this.gestor || !d.gestor) && vale(d.onde)
+    ).map((d) => `${d.uso} — ${d.descricao}`)
+    const proprios = this.ctx.comandos.personalizados
+      .filter((p) => (this.gestor || p.quem === 'todos') && vale(p.onde))
+      .map((p) => `/${p.nome} — ${p.descricao}`)
+    return responder(`${this.t('titulo')}\n${[...prontos, ...proprios].join('\n')}`)
   }
 
   private gestores(): AcaoGrupo[] {
@@ -132,9 +192,9 @@ class Execucao {
       const f = this.achar(m)
       return !!f && ids.has(f.id)
     })
-    if (presentes.length === 0) return responder('Nenhum gestor cadastrado está neste grupo.')
+    if (presentes.length === 0) return responder(this.t('vazio'))
     return responder(
-      `👔 Gestores deste grupo: ${presentes.map((m) => `@${usuarioDoJid(m.jid)}`).join(' ')}`,
+      this.t('lista', { lista: presentes.map((m) => `@${usuarioDoJid(m.jid)}`).join(' ') }),
       presentes.map((m) => m.jid)
     )
   }
@@ -143,7 +203,7 @@ class Execucao {
     const p = this.alvo()
     if (!p) return this.uso()
     const f = this.achar(p)
-    if (!f) return responder('Não encontrei essa pessoa no cadastro.')
+    if (!f) return responder(this.t('nao_encontrado'))
     const selo = f.ativo && this.ctx.gestores.has(f.id) ? ' · 👔 gestor(a)' : ''
     return responder(`🪪 ${descrever(f)}${selo}`)
   }
@@ -186,10 +246,14 @@ class Execucao {
     return [
       { tipo: 'salvar_funcionario', id: atual?.id ?? null, dados },
       { tipo: 'auditar', acao: atual ? 'atualizar_funcionario' : 'cadastrar_funcionario', detalhe: `${nome} (${resumo})` },
-      ...responder(`✅ ${nome} ${atual ? 'atualizado(a)' : 'cadastrado(a)'}: ${resumo}.`)
+      ...responder(this.t('sucesso', { nome, acao: atual ? 'atualizado(a)' : 'cadastrado(a)', resumo }))
     ]
   }
 
+  /**
+   * Indicar não dá poder: a pessoa vira pendente e o código vai para o privado de quem indicou, que o
+   * repassa. Indicar de novo alguém pendente só troca o código (o anterior pode ter vencido).
+   */
   private gestorCmd(): AcaoGrupo[] {
     const [sub = '', ...resto] = this.cmd.args.split(' ')
     const s = semAcento(sub)
@@ -200,31 +264,32 @@ class Execucao {
     if (!pessoa) return this.uso()
     const f = this.achar(pessoa)
     if (!f) return responder('Essa pessoa não está no cadastro. Use /cadastrar primeiro.')
-    const ja = this.ctx.gestores.has(f.id)
+    const confirmado = this.ctx.gestores.has(f.id)
+    const pendente = this.ctx.pendentes.some((p) => p.funcionarioId === f.id)
     if (adicionar) {
       if (!f.ativo) return responder(`${f.nome} está com o cadastro inativo.`)
-      if (ja) return responder(`${f.nome} já é gestor(a).`)
+      if (confirmado) return responder(`${f.nome} já é gestor(a).`)
       return [
-        { tipo: 'gestor', funcionarioId: f.id, ativo: true },
-        { tipo: 'auditar', acao: 'gestor_adicionado', detalhe: f.nome },
-        ...responder(`👔 ${f.nome} agora é gestor(a).`)
+        { tipo: 'indicar_gestor', funcionarioId: f.id, avisar: this.ctx.remetente },
+        { tipo: 'auditar', acao: 'gestor_indicado', detalhe: `${f.nome} no ${this.ctx.bot.nome}`, funcionarioId: f.id },
+        ...responder(this.t('pendente', { nome: f.nome }))
       ]
     }
-    if (!ja) return responder(`${f.nome} não é gestor(a).`)
+    if (!confirmado && !pendente) return responder(`${f.nome} não é gestor(a).`)
     // Alvo inativo não conta como "o último gestor": inativo já não tem poder de gestor de qualquer forma.
-    if (f.ativo && this.gestoresAtivos().length <= 1) {
+    if (confirmado && f.ativo && this.gestoresAtivos().length <= 1) {
       return responder('Não dá para remover o último gestor. Adicione outro antes ou use o painel.')
     }
     return [
-      { tipo: 'gestor', funcionarioId: f.id, ativo: false },
-      { tipo: 'auditar', acao: 'gestor_removido', detalhe: f.nome },
-      ...responder(`${f.nome} não é mais gestor(a).`)
+      { tipo: 'remover_gestor', funcionarioId: f.id },
+      { tipo: 'auditar', acao: 'gestor_removido', detalhe: `${f.nome} no ${this.ctx.bot.nome}`, funcionarioId: f.id },
+      ...responder(this.t('removido', { nome: f.nome }))
     ]
   }
 
   private setores(): AcaoGrupo[] {
     const ativos = this.ctx.funcionarios.filter((f) => f.ativo)
-    if (ativos.length === 0) return responder('Ninguém cadastrado ainda.')
+    if (ativos.length === 0) return responder(this.t('vazio'))
     const porSetor = new Map<string, Map<string, number>>()
     for (const f of ativos) {
       const lojas = porSetor.get(f.setor ?? 'Sem setor') ?? new Map<string, number>()
@@ -242,37 +307,35 @@ class Execucao {
           .join(', ')
         return `• ${setor}: ${total} (${detalhe})`
       })
-    return responder(`📋 Setores e lojas — ${ativos.length} pessoas\n${listar(linhas)}`)
+    return responder(`${this.t('titulo', { total: ativos.length })}\n${listar(linhas)}`)
   }
 
   private desconhecidos(): AcaoGrupo[] {
     const fora = (this.ctx.membros ?? []).filter((m) => !this.achar(m))
-    if (fora.length === 0) return responder('✅ Todos os participantes deste grupo estão cadastrados.')
+    if (fora.length === 0) return responder(this.t('todos'))
     // LGPD: quem participa pelo LID tem o número escondido pelo WhatsApp para o grupo; mesmo que o bot
     // o conheça (lidMapping), não o expõe aqui. Só mostra telefone de quem já aparece com ele no grupo.
     const linhas = fora.map((m) => {
       const visivel = m.jid.endsWith('@s.whatsapp.net') && m.telefone
       return `• ${visivel ? formatarTelefone(m.telefone!) : `contato oculto (${usuarioDoJid(m.jid)})`}`
     })
-    return responder(
-      `❓ ${fora.length} sem cadastro:\n${listar(linhas)}\n\nCadastre com /cadastrar @pessoa Nome | Setor | Loja`
-    )
+    return responder(`${this.t('titulo', { total: fora.length })}\n${listar(linhas)}\n\n${this.t('rodape')}`)
   }
 
   private grupos(): AcaoGrupo[] {
-    if (this.ctx.grupos.length === 0) return responder('Este número não está em nenhum grupo.')
+    if (this.ctx.grupos.length === 0) return responder(this.t('vazio'))
     const linhas = this.ctx.grupos.map((g) => {
-      const etiquetas = [g.setor, g.loja].filter(Boolean).join(' · ')
+      const etiquetas = [g.loja, g.setor].filter(Boolean).join(' · ')
       return `• ${g.nome} — ${g.botAdmin ? 'admin ✅' : 'sem admin ❌'}${etiquetas ? ` — ${etiquetas}` : ''}`
     })
-    return responder(`👥 Grupos deste número (${this.ctx.grupos.length})\n${listar(linhas)}`)
+    return responder(`${this.t('titulo', { total: this.ctx.grupos.length })}\n${listar(linhas)}`)
   }
 
   private status(): AcaoGrupo[] {
     const ativos = this.ctx.funcionarios.filter((f) => f.ativo).length
     const conexao = this.ctx.conectadoDesde ? `Conectado desde ${horaBR(this.ctx.conectadoDesde)}` : 'Conexão instável'
     return responder(
-      `🤖 ${conexao} · ${this.ctx.grupos.length} grupos · ${ativos} pessoas cadastradas (${this.gestoresAtivos().length} gestores)`
+      this.t('resumo', { conexao, grupos: this.ctx.grupos.length, pessoas: ativos, gestores: this.gestoresAtivos().length })
     )
   }
 
@@ -285,6 +348,6 @@ class Execucao {
       .map((l) => `${horaBR(l.em)} · ${l.usuario} · ${l.acao}${l.detalhe ? ` · ${l.detalhe}` : ''}`)
       .map((l) => (l.length > 200 ? l.slice(0, 200) : l))
     if (linhas.length === 0) return responder('Nada registrado ainda.')
-    return responder(`📜 Últimas ações\n${linhas.join('\n')}`)
+    return responder(`${this.t('titulo')}\n${linhas.join('\n')}`)
   }
 }

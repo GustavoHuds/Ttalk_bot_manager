@@ -1,4 +1,5 @@
-import type { DadosFuncionario, Funcionario, Grupo } from '../db/grupos.js'
+import type { DadosFuncionario, Funcionario } from '../db/grupos.js'
+import type { ComandosDoBot } from './catalogo.js'
 
 /** Alguém no WhatsApp: o JID visto, o telefone (quando se sabe) e o LID (quando existe). */
 export interface Pessoa {
@@ -49,6 +50,8 @@ export type EventoGrupos =
   | { tipo: 'renomeado'; jid: string; nome: string }
   | { tipo: 'admin'; jid: string; admin: boolean }
   | { tipo: 'saiu'; jid: string }
+  /** Alguém (não o bot) entrou, saiu, virou ou deixou de ser admin. Só importa em grupo ativo. */
+  | { tipo: 'participantes'; jid: string; acao: 'add' | 'remove' | 'promote' | 'demote'; membros: MembroGrupo[] }
 
 /** O que o bot de grupos precisa de uma conexão de WhatsApp. */
 export interface ConexaoGrupos {
@@ -71,9 +74,28 @@ export interface LinhaAuditoria {
   detalhe: string | null
 }
 
+/** Grupo ativo de um bot, como o motor enxerga. */
+export interface GrupoDoBot {
+  jid: string
+  nome: string
+  botAdmin: boolean
+  loja: string | null
+  setor: string | null
+}
+
+/** Gestor indicado que ainda não confirmou (sem poder nenhum). */
+export interface GestorPendente {
+  funcionarioId: number
+  codigo: string | null
+  expiraEm: number | null
+}
+
 /** Retrato do momento entregue ao motor. */
 export interface ContextoGrupos {
   agora: number
+  bot: { id: number; nome: string }
+  /** Como este bot configurou os comandos (desligados, textos, personalizados). */
+  comandos: ComandosDoBot
   chat: string
   ehGrupo: boolean
   remetente: Pessoa
@@ -81,17 +103,18 @@ export interface ContextoGrupos {
   mencionados: Pessoa[]
   citada: Pessoa | null
   funcionarios: Funcionario[]
-  /** IDs de funcionário que são gestores. */
+  /** IDs de funcionário que são gestores confirmados deste bot. */
   gestores: Set<number>
-  /** Grupo da mensagem; null no privado. */
-  grupo: Grupo | null
-  /** Grupos ativos deste número. */
-  grupos: Grupo[]
+  pendentes: GestorPendente[]
+  /** Grupo da mensagem (sempre um grupo ativo do bot); null no privado. */
+  grupo: GrupoDoBot | null
+  /** Grupos ativos deste bot. */
+  grupos: GrupoDoBot[]
   /** Participantes do grupo, só quando o comando precisa (senão null). */
   membros: MembroGrupo[] | null
   /** Auditoria mais recente primeiro (até 30). */
   auditoria: LinhaAuditoria[]
-  /** Desde quando este número está conectado. */
+  /** Desde quando o número do bot está conectado. */
   conectadoDesde: number | null
 }
 
@@ -99,5 +122,13 @@ export type AcaoGrupo =
   | { tipo: 'responder'; texto: string; mencoes?: string[] }
   /** id null cria; senão substitui os campos. */
   | { tipo: 'salvar_funcionario'; id: number | null; dados: DadosFuncionario }
-  | { tipo: 'gestor'; funcionarioId: number; ativo: boolean }
-  | { tipo: 'auditar'; acao: string; detalhe: string }
+  /** Indica (pendente). O orquestrador gera o código e manda no privado de quem pediu (`avisar`). */
+  | { tipo: 'indicar_gestor'; funcionarioId: number; avisar: Pessoa }
+  | { tipo: 'remover_gestor'; funcionarioId: number }
+  /** Código certo vindo do WhatsApp do cadastro. */
+  | { tipo: 'confirmar_gestor'; funcionarioId: number; pessoa: Pessoa }
+  /** Código certo vindo de outro WhatsApp: fica para conferir no painel. */
+  | { tipo: 'divergencia'; funcionarioId: number; pessoa: Pessoa }
+  /** Código errado ou vencido (conta para o limite de tentativas). */
+  | { tipo: 'codigo_errado' }
+  | { tipo: 'auditar'; acao: string; detalhe: string; funcionarioId?: number }

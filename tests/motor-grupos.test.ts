@@ -1,22 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import type { Funcionario, Grupo } from '../src/db/grupos.js'
+import type { Funcionario } from '../src/db/grupos.js'
+import { COMANDOS_PADRAO, comandosDoBot } from '../src/grupos/catalogo.js'
 import { interpretar } from '../src/grupos/comandos.js'
 import { processarComando } from '../src/grupos/motor.js'
-import type { AcaoGrupo, ContextoGrupos, MembroGrupo, Pessoa } from '../src/grupos/tipos.js'
+import type { AcaoGrupo, ContextoGrupos, GrupoDoBot, MembroGrupo, Pessoa } from '../src/grupos/tipos.js'
 import { AGORA } from './ajuda.js'
 
 const ANA: Funcionario = {
   id: 1, nome: 'Ana Souza', telefone: '5583999990001', lid: '111@lid',
-  setor: 'Vendas', loja: 'Centro', cargo: 'Gerente', nascimento: null, ativo: true
+  setor: 'Vendas', loja: 'Centro', cargo: 'Gerente', nascimento: null, ativo: true, confirmadoEm: AGORA
 }
 const BETO: Funcionario = {
   id: 2, nome: 'Beto Lima', telefone: '5583999990002', lid: null,
-  setor: 'Caixa', loja: 'Sul', cargo: null, nascimento: null, ativo: true
+  setor: 'Caixa', loja: 'Sul', cargo: null, nascimento: null, ativo: true, confirmadoEm: null
 }
-const GRUPO: Grupo = {
-  numeroId: 2, jid: '120363-1@g.us', nome: 'Loja Centro', botAdmin: false,
-  setor: null, loja: 'Centro', ativo: true, atualizadoEm: AGORA
-}
+const GRUPO: GrupoDoBot = { jid: '120363-1@g.us', nome: 'Loja Centro', botAdmin: false, loja: 'Centro', setor: null }
 const ANA_LID: Pessoa = { jid: '111@lid', telefone: null, lid: '111@lid' }
 const BETO_TEL: Pessoa = { jid: '5583999990002@s.whatsapp.net', telefone: '5583999990002', lid: null }
 const ESTRANHO: Pessoa = { jid: '999@lid', telefone: null, lid: '999@lid' }
@@ -26,8 +24,9 @@ const membro = (p: Pessoa): MembroGrupo => ({ ...p, admin: false })
 
 function ctx(extra: Partial<ContextoGrupos> = {}): ContextoGrupos {
   return {
-    agora: AGORA, chat: GRUPO.jid, ehGrupo: true, remetente: ANA_LID, mencionados: [], citada: null,
-    funcionarios: [ANA, BETO], gestores: new Set([1]), grupo: GRUPO, grupos: [GRUPO], membros: null,
+    agora: AGORA, bot: { id: 1, nome: 'Avisos' }, comandos: COMANDOS_PADRAO, chat: GRUPO.jid, ehGrupo: true,
+    remetente: ANA_LID, mencionados: [], citada: null, funcionarios: [ANA, BETO], gestores: new Set([1]), pendentes: [],
+    grupo: GRUPO, grupos: [GRUPO], membros: null,
     auditoria: [], conectadoDesde: AGORA - 3_600_000, ...extra
   }
 }
@@ -102,17 +101,32 @@ describe('motor do bot de grupos: comandos', () => {
     expect(textos(rodar(ctx({ mencionados: [misturado] }), '/cadastrar @111 X Y | A | B'))[0]).toContain('cadastros diferentes')
   })
 
-  it('/gestor add e remover; o último gestor não sai', () => {
+  it('/gestor add indica (pendente) e manda o código para quem pediu; remover; o último gestor não sai', () => {
     const add = rodar(ctx({ mencionados: [BETO_TEL] }), '/gestor add @5583999990002')
-    expect(add.slice(0, 2)).toEqual([
-      { tipo: 'gestor', funcionarioId: 2, ativo: true },
-      { tipo: 'auditar', acao: 'gestor_adicionado', detalhe: 'Beto Lima' }
+    expect(add).toEqual([
+      { tipo: 'indicar_gestor', funcionarioId: 2, avisar: ANA_LID },
+      { tipo: 'auditar', acao: 'gestor_indicado', detalhe: 'Beto Lima no Avisos', funcionarioId: 2 },
+      {
+        tipo: 'responder',
+        texto: '⏳ Beto Lima foi indicado(a) como gestor(a). Para ativar, Beto Lima deve mandar /confirmar no meu privado.'
+      }
     ])
+    // pendente de novo: troca o código
+    const pend = { funcionarioId: 2, codigo: '123456', expiraEm: AGORA + 1 }
+    expect(rodar(ctx({ mencionados: [BETO_TEL], pendentes: [pend] }), '/gestor add @5583999990002')[0]).toMatchObject({ tipo: 'indicar_gestor' })
+    expect(textos(rodar(ctx({ mencionados: [ANA_LID] }), '/gestor add @111'))).toEqual(['Ana Souza já é gestor(a).'])
     expect(textos(rodar(ctx({ mencionados: [ANA_LID] }), '/gestor remover @111'))[0]).toContain('último gestor')
     const rem = rodar(ctx({ mencionados: [BETO_TEL], gestores: new Set([1, 2]) }), '/gestor remover @5583999990002')
-    expect(rem[0]).toEqual({ tipo: 'gestor', funcionarioId: 2, ativo: false })
+    expect(rem[0]).toEqual({ tipo: 'remover_gestor', funcionarioId: 2 })
+    expect(textos(rem)).toEqual(['Beto Lima não é mais gestor(a).'])
+    // pendente também pode ser removido, e não conta como "último gestor"
+    expect(rodar(ctx({ mencionados: [BETO_TEL], pendentes: [pend] }), '/gestor remover @5583999990002')[0]).toEqual({
+      tipo: 'remover_gestor',
+      funcionarioId: 2
+    })
+    expect(textos(rodar(ctx({ mencionados: [BETO_TEL] }), '/gestor remover @5583999990002'))).toEqual(['Beto Lima não é gestor(a).'])
     expect(textos(rodar(ctx({ mencionados: [ESTRANHO] }), '/gestor add @999'))[0]).toContain('não está no cadastro')
-    expect(textos(rodar(privado(), '/gestor add 83999990002'))[0]).toContain('agora é gestor')
+    expect(textos(rodar(privado(), '/gestor add 83999990002'))[0]).toContain('indicado(a) como gestor(a)')
   })
 
   it('/quem responde pela menção ou pela mensagem citada', () => {
@@ -156,7 +170,8 @@ describe('motor do bot de grupos: comandos', () => {
 
   it('/grupos, /status e /log', () => {
     expect(textos(rodar(privado(), '/grupos'))[0]).toContain('Loja Centro — sem admin ❌ — Centro')
-    expect(textos(rodar(ctx(), '/status'))[0]).toContain('1 grupos · 2 pessoas cadastradas (1 gestores)')
+    expect(textos(rodar(ctx(), '/status'))[0]).toContain('1 grupos ativos · 2 pessoas cadastradas (1 gestores)')
+    expect(textos(rodar(privado({ grupos: [] }), '/grupos'))).toEqual(['Nenhum grupo ativo neste bot.'])
     const auditoria = Array.from({ length: 40 }, (_, i) => ({ em: AGORA - i, usuario: 'rh', acao: `a${i}`, detalhe: null }))
     expect(textos(rodar(privado({ auditoria }), '/log 99'))[0]!.split('\n')).toHaveLength(31)
     expect(textos(rodar(privado({ auditoria }), '/log'))[0]!.split('\n')).toHaveLength(11)
@@ -178,7 +193,7 @@ describe('motor do bot de grupos: correções de revisão', () => {
       ctx({ funcionarios: [ANA, betoInativo], gestores: new Set([1, 2]), mencionados: [BETO_TEL] }),
       '/gestor remover @5583999990002'
     )
-    expect(acoes[0]).toEqual({ tipo: 'gestor', funcionarioId: 2, ativo: false })
+    expect(acoes[0]).toEqual({ tipo: 'remover_gestor', funcionarioId: 2 })
   })
 
   it('/cadastrar recusa nome com dígitos (telefone digitado não pode virar nome quando o alvo é a mensagem citada)', () => {
@@ -216,7 +231,7 @@ describe('motor do bot de grupos: correções de revisão', () => {
 
     const carlos: Funcionario = {
       id: 9, nome: 'Carlos Externo', telefone: salvar.dados.telefone, lid: null,
-      setor: 'TI', loja: 'Remoto', cargo: null, nascimento: null, ativo: true
+      setor: 'TI', loja: 'Remoto', cargo: null, nascimento: null, ativo: true, confirmadoEm: null
     }
     const quem = textos(rodar(ctx({ funcionarios: [ANA, BETO, carlos], mencionados: [AMERICANO] }), '/quem @14155550100'))
     expect(quem[0]).toContain('Carlos Externo')
@@ -230,5 +245,99 @@ describe('motor do bot de grupos: correções de revisão', () => {
   it('/cadastrar no privado: telefone brasileiro digitado com "+55" ainda canonicaliza', () => {
     const acoes = rodar(privado(), '/cadastrar +5583999990009 Diana Reis | Caixa | Sul')
     expect(acoes[0]).toMatchObject({ tipo: 'salvar_funcionario', dados: { telefone: '5583999990009' } })
+  })
+})
+
+describe('motor do bot de grupos: confirmação por código', () => {
+  const PEND = { funcionarioId: 2, codigo: '482193', expiraEm: AGORA + 60_000 }
+  const comBetoPendente = (extra: Partial<ContextoGrupos> = {}) => privado({ remetente: BETO_TEL, pendentes: [PEND], ...extra })
+
+  it('código certo vindo do telefone do cadastro confirma e audita', () => {
+    expect(rodar(comBetoPendente(), '/confirmar 482193')).toEqual([
+      { tipo: 'confirmar_gestor', funcionarioId: 2, pessoa: BETO_TEL },
+      { tipo: 'auditar', acao: 'gestor_confirmado', detalhe: 'Beto Lima no Avisos', funcionarioId: 2 },
+      { tipo: 'responder', texto: '✅ Pronto, Beto Lima! Você agora é gestor(a) do Avisos.' }
+    ])
+  })
+
+  it('o LID do cadastro também vale; espaços e traços no código são ignorados', () => {
+    const betoComLid: Funcionario = { ...BETO, lid: '222@lid' }
+    const pelaLid: Pessoa = { jid: '222@lid', telefone: null, lid: '222@lid' }
+    const acoes = rodar(comBetoPendente({ funcionarios: [ANA, betoComLid], remetente: pelaLid }), '/confirmar 482-193')
+    expect(acoes[0]).toEqual({ tipo: 'confirmar_gestor', funcionarioId: 2, pessoa: pelaLid })
+  })
+
+  it('código certo de outro WhatsApp vira divergência, sem poder', () => {
+    const outro: Pessoa = { jid: '5583988887777@s.whatsapp.net', telefone: '5583988887777', lid: null }
+    const acoes = rodar(comBetoPendente({ remetente: outro }), '/confirmar 482193')
+    expect(acoes[0]).toEqual({ tipo: 'divergencia', funcionarioId: 2, pessoa: outro })
+    expect(acoes[1]).toEqual({
+      tipo: 'auditar', acao: 'gestor_divergente', detalhe: 'Beto Lima no Avisos: veio de +55 83 98888-7777', funcionarioId: 2
+    })
+    expect(textos(acoes)[0]).toContain('diferente do cadastro de Beto Lima')
+  })
+
+  it('código errado, vencido ou ausente: inválido e conta como tentativa errada', () => {
+    const invalido = 'Código inválido ou vencido. Peça um novo código a quem cadastrou você.'
+    for (const t of ['/confirmar 000000', '/confirmar', '/confirmar 48219']) {
+      expect(rodar(comBetoPendente(), t)).toEqual([{ tipo: 'codigo_errado' }, { tipo: 'responder', texto: invalido }])
+    }
+    expect(rodar(comBetoPendente({ agora: PEND.expiraEm }), '/confirmar 482193')[0]).toEqual({ tipo: 'codigo_errado' })
+    // estranho, fora do cadastro, também pode tentar (e erra)
+    expect(rodar(privado({ remetente: ESTRANHO, pendentes: [PEND] }), '/confirmar 111111')[0]).toEqual({ tipo: 'codigo_errado' })
+  })
+
+  it('no grupo, /confirmar só manda usar no privado e nunca olha o código', () => {
+    expect(rodar(ctx({ remetente: BETO_TEL, pendentes: [PEND] }), '/confirmar 482193')).toEqual([
+      { tipo: 'responder', texto: 'Use /confirmar no privado comigo.' }
+    ])
+  })
+
+  it('gestor pendente não tem poder; /confirmar não aparece no /menu', () => {
+    expect(rodar(comBetoPendente(), '/status')).toEqual([])
+    expect(textos(rodar(privado(), '/menu'))[0]).not.toContain('/confirmar')
+  })
+})
+
+describe('motor do bot de grupos: comandos do bot', () => {
+  const salvo = (nome: string, extra: object) => ({
+    nome, ligado: true, personalizado: false, quem: null, onde: null, descricao: null, resposta: null, textos: {}, ...extra
+  })
+  const comandos = comandosDoBot(
+    new Map([
+      ['quem', salvo('quem', { ligado: false })],
+      ['status', salvo('status', { textos: { resumo: 'Bot ok: {grupos} grupo(s), {gestores} gestor(es)' } })],
+      ['menu', salvo('menu', { textos: { titulo: '🤖 O que eu faço' } })],
+      ['horario', salvo('horario', { personalizado: true, quem: 'todos', onde: 'grupo', descricao: 'horário das lojas', resposta: 'Seg a sáb, 8h às 18h' })],
+      ['metas', salvo('metas', { personalizado: true, quem: 'gestores', onde: 'ambos', descricao: 'metas do mês', resposta: 'Meta: 100 vendas' })]
+    ])
+  )
+
+  it('comando desligado: gestor ouve que está desligado; os outros, silêncio', () => {
+    expect(textos(rodar(ctx({ comandos, mencionados: [BETO_TEL] }), '/quem @5583999990002'))).toEqual(['Este comando está desligado neste bot.'])
+    expect(rodar(ctx({ comandos, remetente: BETO_TEL, mencionados: [ANA_LID] }), '/quem @111')).toEqual([])
+  })
+
+  it('/menu usa o título editado, esconde o desligado e mostra os personalizados que a pessoa pode usar', () => {
+    const beto = textos(rodar(ctx({ comandos, remetente: BETO_TEL }), '/menu'))[0]!
+    expect(beto.split('\n')[0]).toBe('🤖 O que eu faço')
+    expect(beto).not.toContain('/quem')
+    expect(beto).toContain('/horario — horário das lojas')
+    expect(beto).not.toContain('/metas')
+    const ana = textos(rodar(ctx({ comandos }), '/menu'))[0]!
+    expect(ana).toContain('/metas — metas do mês')
+    expect(textos(rodar(privado({ comandos }), '/menu'))[0]).not.toContain('/horario')
+  })
+
+  it('personalizado responde o texto fixo e respeita quem e onde', () => {
+    expect(textos(rodar(ctx({ comandos, remetente: BETO_TEL }), '/horario'))).toEqual(['Seg a sáb, 8h às 18h'])
+    expect(textos(rodar(privado({ comandos }), '/horario'))).toEqual(['O /horario funciona dentro de um grupo.'])
+    expect(rodar(ctx({ comandos, remetente: BETO_TEL }), '/metas')).toEqual([])
+    expect(textos(rodar(privado({ comandos }), '/metas'))).toEqual(['Meta: 100 vendas'])
+    expect(rodar(privado({ comandos, remetente: BETO_TEL }), '/horario')).toEqual([])
+  })
+
+  it('texto editado do /status preenche os campos', () => {
+    expect(textos(rodar(ctx({ comandos }), '/status'))).toEqual(['Bot ok: 1 grupo(s), 1 gestor(es)'])
   })
 })
