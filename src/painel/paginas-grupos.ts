@@ -87,7 +87,7 @@ export function paginaGrupos(d: DadosGrupos, usuario: string, ok: string | null,
         var v=r.getAttribute('data-nome').indexOf(t)!==-1;r.hidden=!v;if(v)n++;});document.getElementById('nenhum').hidden=n>0||!t;});})();</script>`
   const semCadastro = d.ativos.reduce((s, x) => s + (x.participantes?.semCadastro ?? 0), 0)
   const corpo = `${seletorBots(d.bots, b.id)}
-    <div class="topo"><h1>Grupos · ${esc(b.nome)}</h1><span class="linha">${numero}<a class="botao" href="/grupos-bot/${b.id}/lojas">Lojas</a></span></div>
+    <div class="topo"><h1>Grupos · ${esc(b.nome)}</h1><span class="linha">${numero}<a class="botao" href="/grupos-bot/${b.id}/lojas">Lojas</a><a class="botao" href="/grupos-bot/${b.id}">Configurar bot</a></span></div>
     ${mensagem(ok, erro)}
     ${resumo([
       { valor: d.ativos.length, rotulo: 'grupos ativos' },

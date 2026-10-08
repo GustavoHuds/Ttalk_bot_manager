@@ -42,7 +42,7 @@ Ttalk is the whole thing in one small process: one or more WhatsApp numbers (rec
 - Candidate list per opening, file download, **ZIP export (CSV + files)** ready for AI screening.
 - **Numbers** page (one QR code per number), health page, full audit log (who viewed, downloaded, exported or deleted what).
 - **Several WhatsApp numbers in one process.** Each number has one role: *recruitment* (candidates) or *groups* (company groups). A ban on one never touches the other.
-- **Group bot core.** Team registry (with CSV import/export), managers, and WhatsApp commands: `/menu`, `/gestores`, `/quem`, `/cadastrar`, `/setores`, `/desconhecidos`, `/grupos`, `/gestor add|remover`, `/status`, `/log`. Only registered managers can run management commands; being a WhatsApp group admin grants nothing. Plain group chat is never stored.
+- **Group bots.** Each group bot is its own entity (separate from the number, so swapping the SIM keeps everything) with its own active groups, stores, managers and commands. The bot only acts in groups you activate. Managers are per bot and must confirm by sending a 6-digit code (`/confirmar`) from the WhatsApp in their registry entry. Commands can be turned on or off, their replies edited, and fixed-reply custom commands added. Built-in commands: `/menu`, `/gestores`, `/quem`, `/cadastrar`, `/setores`, `/desconhecidos`, `/grupos`, `/gestor add|remover`, `/status`, `/log`, `/confirmar`. Being a WhatsApp group admin grants nothing. Plain group chat is never stored.
 
 **Reliability** (the guarantees you would get from the official API)
 
@@ -127,7 +127,7 @@ docker compose up -d --build
 
 Open `http://127.0.0.1:3100`, sign in, go to **Números**, open *Principal* and scan the QR code with WhatsApp → *Linked devices*. Then **+ Novo bot**, fill in the opening, **Abrir inscrições**, and share the link shown in the list.
 
-To add the group bot: **Números → + Número** with role *Grupos*, scan the QR with that phone, add the number to your groups, then register people in **Equipe** (or import a CSV) and mark at least one manager. Managers send `/menu` to the bot in private to see what they can do.
+To add a group bot: **Números → + Número** with role *Grupos* and scan the QR with that phone; add the number to your groups; then **Bots → + Bot de grupos** and pick that number. In the bot's **Grupos** tab activate the groups it should act in (with their store), register people in **Equipe** (or import a CSV), and in **Gestores** nominate at least one manager, who confirms by sending the code to the bot in private. Managers send `/menu` to the bot in private to see what they can do.
 
 In production, publish the panel behind your reverse proxy with HTTPS:
 
