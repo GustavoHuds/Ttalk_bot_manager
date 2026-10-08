@@ -2,18 +2,31 @@
 
 ## Unreleased
 
-- **Bots de grupos** viram bots de verdade: aparecem em *Bots*, separados do número (trocar o chip mantém lojas, gestores, comandos e grupos ativos), com as abas Geral, Grupos, Lojas, Gestores e Comandos.
-- **Grupos ativos:** o bot só atua nos grupos escolhidos no painel, cada um com a sua loja e setor. Nos outros, silêncio total, sem guardar nada. A lista geral mostra todos os grupos do número, com busca.
-- **Gestores por bot, confirmados por código:** indicar alguém gera um código de 6 dígitos (vale 48 h) e um link `wa.me`. A pessoa manda `/confirmar <código>` no privado do bot, e só vira gestora se a mensagem vier do WhatsApp do cadastro. Se vier de outro, o painel mostra a divergência para corrigir ou descartar. Há limite de tentativas erradas. `/gestor add` pelo WhatsApp manda o código só no privado de quem pediu.
-- **Comandos por bot:** ligar/desligar, editar os textos de resposta (com campos como `{nome}`) e criar comandos personalizados de resposta fixa.
-- **Equipe:** situação do WhatsApp de cada pessoa (confirmado, visto nos grupos, nunca visto), filtros por loja e situação, e página da pessoa com os grupos em que aparece, os bots em que é gestora e o histórico dela.
-- Participantes são guardados só para os grupos ativos (sem nomes nem mensagens) e somem quando o grupo é desativado.
-- Atualização: depois de migrar, **nenhum grupo fica ativo** (ative-os em *Grupos*) e os gestores antigos ficam pendentes de confirmação.
-- Vários números de WhatsApp no mesmo processo, cada um com um uso (recrutamento ou grupos). Página **Números** substitui **Conexão**; `/healthz` só responde ok com todos os números ativos conectados; `/saude` mostra cada número; alertas dizem qual número caiu.
-- Cada bot de recrutamento escolhe o seu número. Conversas, filas e candidaturas ficam separadas por número.
-- Bot de grupos (núcleo): cadastro da equipe com importação/exportação CSV, gestores, grupos com setor e loja, e os comandos `/menu`, `/gestores`, `/quem`, `/cadastrar`, `/setores`, `/desconhecidos`, `/grupos`, `/gestor`, `/status`, `/log`. Toda ação de gestão é auditada.
-- Telefones de outros países: digitados com `+<código do país>` no painel, no CSV e no `/cadastrar` (sem `+` é Brasil). A importação CSV aceita vírgula ou ponto e vírgula e arquivos em UTF-8 ou do Excel (Windows-1252).
-- Atualização: o banco migra sozinho (tudo vai para o número 1) e `data/sessao` vira `data/sessoes/1` sem ler o QR de novo. O backup passa a incluir `data/sessoes/`.
+### Group bots
+- New bot type that runs company WhatsApp groups. Each group bot is its own entity, separate from the number it uses, so swapping the SIM keeps its groups, managers, commands and schedules.
+- Acts only in the groups you activate; everywhere else it stays silent and stores nothing.
+- Managers are added by name and WhatsApp and gain power only after sending a 6-digit code (`/confirmar`, valid 48 h) from that WhatsApp. A correct code from another number shows up in the panel to accept or discard. Wrong codes are rate-limited.
+- Commands, usable in the group or in private (the bot asks which group, numbered, and remembers the choice): `/all`, `/todos`, `/mencionar`, `/remove`, `/banword`, `/mutegroup` (now or a daily window), `/unmute`, `/repeat` / `/repeat stop`, `/menu`, `/grupo`. Each can be switched off per bot.
+- Scheduled messages: weekdays or a single date, up to four times a day, up to three variations, media (image, video, audio, document) and an optional hidden mention of everyone.
+- Messages with banned words are deleted; groups are opened and closed on schedule.
+
+### Numbers
+- Several WhatsApp numbers in one process, each with one role (recruitment or groups). The **Numbers** page replaces **Connection**; `/healthz` is ok only when every active number is connected, and alerts name the number that dropped.
+- **Pause** (stays connected, the bot stops reading and sending) and **Revoke** (logs the linked WhatsApp out and shows a new QR).
+- The QR only runs while the number's page is open; with nobody watching, pairing stops after 30 s.
+- Each recruitment bot picks its number. Conversations, queues and applications are kept per number.
+
+### Panel
+- New layout: left sidebar, responsive tables that turn into cards on phones, light and dark themes.
+- Everything about a group bot lives in its own tabs: General, Groups, Managers, Commands and Scheduled.
+
+### Anti-ban
+- "Typing…" sized to the message and randomised every time, followed by "stopped typing".
+- Irregular gaps between messages, per-hour caps on top of per-minute caps, scheduled sends spread over 45 s, one mass mention per minute per group, message variations, read before reply, no link previews. See [docs/anti-ban.md](docs/anti-ban.md).
+
+### Upgrading
+- The database migrates itself; existing data is kept. `data/sessao` becomes `data/sessoes/1` without re-pairing, and backups now include `data/sessoes/`.
+- Numbers that were disabled now show as *no connection*; open the number's page to pair it again.
 
 ## 1.0.0 — 2026-10-06
 
