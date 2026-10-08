@@ -1,10 +1,23 @@
 import type { FastifyInstance } from 'fastify'
 import { semAcento } from '../conversa/textos.js'
-import type { DadosFuncionario } from '../db/grupos.js'
+import type { DadosFuncionario, Funcionario } from '../db/grupos.js'
 import { ErroEquipe, lerCsvEquipe, validarFuncionario, type LinhaCsv } from '../grupos/equipe.js'
 import { formatarTelefone } from '../grupos/pessoas.js'
 import { gerarCsvEquipe } from './exportar.js'
-import { paginaEquipe, paginaFuncionario, paginaGrupos, paginaImportar, type FormFuncionario, type LinhaPrevia } from './paginas-equipe.js'
+import {
+  FILTROS_SITUACAO,
+  paginaEquipe,
+  paginaFuncionario,
+  paginaImportar,
+  situacaoWhatsApp,
+  type FiltroSituacao,
+  type FormFuncionario,
+  type GestorDaPessoa,
+  type LinhaEquipe,
+  type LinhaPrevia,
+  type PerfilPessoa
+} from './paginas-equipe.js'
+import { mensagemOk } from './rotas-bot-grupos.js'
 import type { Ajudantes } from './rotas-numeros.js'
 import type { DependenciasPainel } from './servidor.js'
 
@@ -21,57 +34,87 @@ interface CorpoFuncionario {
 
 export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajudantes): void {
   const g = d.grupos
+  const b = d.botsGrupos
   const porId = (id: string) => (/^\d+$/.test(id) ? g.funcionario(Number(id)) : null)
 
-  app.get<{ Querystring: { salvo?: string } }>('/grupos', async (req, rep) => {
-    const todos = g.todosGrupos()
-    const blocos = d.numeros
-      .listar()
-      .filter((n) => n.papel === 'grupos')
-      .map((numero) => ({ numero, grupos: todos.filter((x) => x.numeroId === numero.id) }))
-    return a.html(rep, paginaGrupos(blocos, a.usuario(req), req.query.salvo ? 'Etiquetas salvas.' : null))
-  })
+  /** Gestor em cada bot, por pessoa. */
+  const gestoresPorPessoa = (): Map<number, GestorDaPessoa[]> => {
+    const mapa = new Map<number, GestorDaPessoa[]>()
+    for (const bot of b.bots()) {
+      for (const x of b.gestores(bot.id)) {
+        const situacao = x.confirmadoEm ? 'confirmado' : x.divergenteEm ? 'divergente' : 'pendente'
+        mapa.set(x.funcionarioId, [...(mapa.get(x.funcionarioId) ?? []), { botId: bot.id, bot: bot.nome, situacao }])
+      }
+    }
+    return mapa
+  }
 
-  app.post<{ Body: { numero_id?: string; jid?: string; setor?: string; loja?: string } }>('/grupos/etiquetar', async (req, rep) => {
-    const numeroId = Number(req.body?.numero_id)
-    const jid = req.body?.jid ?? ''
-    const limpar = (v?: string) => (v ?? '').trim().replace(/\s+/g, ' ').slice(0, 60) || null
-    const setor = limpar(req.body?.setor)
-    const loja = limpar(req.body?.loja)
-    const ok = d.repo.transacao(() => {
-      if (!g.etiquetarGrupo(numeroId, jid, setor, loja, a.agora())) return false
-      d.repo.auditar(a.usuario(req), 'etiquetar_grupo', `${g.grupo(numeroId, jid)?.nome ?? jid}: ${setor ?? '—'} · ${loja ?? '—'}`, a.agora())
-      return true
-    })
-    if (!ok) return rep.code(404).send('Grupo não encontrado')
-    return rep.redirect('/grupos?salvo=1', 303)
-  })
+  const filtro = (v: string | undefined): FiltroSituacao => (v && Object.hasOwn(FILTROS_SITUACAO, v) ? (v as FiltroSituacao) : '')
 
-  app.get<{ Querystring: { q?: string; salvo?: string; excluido?: string; importados?: string } }>('/equipe', async (req, rep) => {
-    const q = (req.query.q ?? '').trim()
-    const termo = semAcento(q)
-    const digitos = q.replace(/\D/g, '')
-    const lista = g
-      .funcionarios()
-      .filter(
-        (f) =>
-          !q ||
+  app.get<{ Querystring: { q?: string; loja?: string; situacao?: string; salvo?: string; excluido?: string; importados?: string } }>(
+    '/equipe',
+    async (req, rep) => {
+      const q = (req.query.q ?? '').trim()
+      const loja = (req.query.loja ?? '').trim()
+      const situacao = filtro(req.query.situacao)
+      const termo = semAcento(q)
+      const digitos = q.replace(/\D/g, '')
+      const gestores = gestoresPorPessoa()
+      const todas: LinhaEquipe[] = g
+        .funcionarios()
+        .map((f) => ({ f, gestor: gestores.get(f.id) ?? [], grupos: b.gruposDaPessoa(f.telefone, f.lid).length }))
+      const passa = ({ f, gestor, grupos }: LinhaEquipe): boolean => {
+        if (situacao === 'inativos' ? f.ativo : !f.ativo) return false
+        const s = situacaoWhatsApp(f, grupos)
+        if (situacao === 'confirmados' && s !== 'confirmado') return false
+        if (situacao === 'nao_confirmados' && s === 'confirmado') return false
+        if (situacao === 'nunca_vistos' && s !== 'nunca') return false
+        if (situacao === 'gestores' && !gestor.some((x) => x.situacao === 'confirmado')) return false
+        if (situacao === 'pendentes' && !gestor.some((x) => x.situacao !== 'confirmado')) return false
+        if (loja && semAcento(f.loja ?? '') !== semAcento(loja)) return false
+        if (!q) return true
+        return (
           semAcento([f.nome, f.setor, f.loja, f.cargo].filter(Boolean).join(' ')).includes(termo) ||
           (digitos.length >= 4 && (f.telefone ?? '').includes(digitos))
+        )
+      }
+      const ativas = todas.filter((x) => x.f.ativo)
+      const msg = req.query.salvo
+        ? 'Cadastro salvo.'
+        : req.query.excluido
+          ? 'Pessoa excluída do cadastro.'
+          : req.query.importados
+            ? `${Number(req.query.importados)} pessoa(s) importada(s).`
+            : null
+      const lojas = [...new Map(todas.flatMap(({ f }) => (f.loja ? [[semAcento(f.loja), f.loja] as const] : []))).values()].sort((x, y) =>
+        x.localeCompare(y, 'pt-BR')
       )
-    const msg = req.query.salvo
-      ? 'Cadastro salvo.'
-      : req.query.excluido
-        ? 'Pessoa excluída do cadastro.'
-        : req.query.importados
-          ? `${Number(req.query.importados)} pessoa(s) importada(s).`
-          : null
-    return a.html(rep, paginaEquipe(lista, new Set(g.gestores()), q, a.usuario(req), msg))
-  })
+      return a.html(
+        rep,
+        paginaEquipe(
+          {
+            linhas: todas.filter(passa),
+            q,
+            loja,
+            situacao,
+            lojas,
+            contagem: {
+              ativos: ativas.length,
+              confirmados: ativas.filter((x) => x.f.confirmadoEm).length,
+              nuncaVistos: ativas.filter((x) => situacaoWhatsApp(x.f, x.grupos) === 'nunca').length,
+              gestores: ativas.filter((x) => x.gestor.some((y) => y.situacao === 'confirmado')).length
+            }
+          },
+          a.usuario(req),
+          msg
+        )
+      )
+    }
+  )
 
   const vazio: FormFuncionario = { id: null, nome: '', telefone: '', setor: '', loja: '', cargo: '', nascimento: '', ativo: true, lid: null }
 
-  app.get('/equipe/novo', async (req, rep) => a.html(rep, paginaFuncionario(vazio, a.usuario(req), null)))
+  app.get('/equipe/novo', async (req, rep) => a.html(rep, paginaFuncionario(vazio, a.usuario(req), null, b.nomesDeLojas())))
 
   app.get('/equipe/importar', async (req, rep) => a.html(rep, paginaImportar(a.usuario(req), '', null, null)))
 
@@ -79,45 +122,73 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
     const lista = g.funcionarios()
     d.repo.auditar(a.usuario(req), 'exportar_equipe', `${lista.length} pessoas`, a.agora())
     const dia = new Date(a.agora()).toISOString().slice(0, 10)
+    const gestores = new Set(b.bots().flatMap((bot) => b.gestoresConfirmados(bot.id)))
     return rep
       .type('text/csv; charset=utf-8')
       .header('Content-Disposition', `attachment; filename="equipe-${dia}.csv"`)
-      .send(gerarCsvEquipe(lista, new Set(g.gestores())))
+      .send(gerarCsvEquipe(lista, gestores))
   })
 
-  app.get<{ Params: { id: string } }>('/equipe/:id', async (req, rep) => {
+  /** Formulário preenchido com o cadastro, e o telefone formatado. */
+  const formDe = (f: Funcionario): FormFuncionario => ({
+    id: f.id,
+    nome: f.nome,
+    // Formatado ("+55 83 …" ou "+<DDI>…"): a chave crua de um estrangeiro, sem o "+", voltaria como
+    // brasileira ao salvar (telefoneDigitado) e ganharia um 55 inventado.
+    telefone: f.telefone ? formatarTelefone(f.telefone) : '',
+    setor: f.setor ?? '',
+    loja: f.loja ?? '',
+    cargo: f.cargo ?? '',
+    nascimento: f.nascimento ?? '',
+    ativo: f.ativo,
+    lid: f.lid
+  })
+
+  const perfilDe = (f: Funcionario): PerfilPessoa => {
+    const bots = b.bots()
+    const nomeBot = new Map(bots.map((x) => [x.id, x]))
+    const grupos = b.gruposDaPessoa(f.telefone, f.lid).map(({ botId, jid }) => {
+      const bot = nomeBot.get(botId)
+      const geral = bot?.numeroId ? g.grupo(bot.numeroId, jid) : null
+      return { bot: bot?.nome ?? `#${botId}`, nome: geral?.nome ?? jid, loja: b.grupoAtivo(botId, jid)?.loja ?? null }
+    })
+    return {
+      pessoa: f,
+      grupos,
+      gestores: bots.map((bot) => {
+        const gestor = b.gestor(bot.id, f.id)
+        return {
+          bot,
+          linha: gestor ? { gestor, pessoa: f } : null,
+          telefoneBot: bot.numeroId ? (d.conexoes.estado(bot.numeroId)?.numero ?? null) : null
+        }
+      }),
+      historico: d.repo.auditoriaDaPessoa(f.id, 30),
+      agora: a.agora()
+    }
+  }
+
+  app.get<{ Params: { id: string }; Querystring: { ok?: string; erro?: string } }>('/equipe/:id', async (req, rep) => {
     const f = porId(req.params.id)
     if (!f) return rep.code(404).send('Pessoa não encontrada')
-    const form: FormFuncionario = {
-      id: f.id,
-      nome: f.nome,
-      // Formatado ("+55 83 …" ou "+<DDI>…"): a chave crua de um estrangeiro, sem o "+", voltaria como
-      // brasileira ao salvar (telefoneDigitado) e ganharia um 55 inventado.
-      telefone: f.telefone ? formatarTelefone(f.telefone) : '',
-      setor: f.setor ?? '',
-      loja: f.loja ?? '',
-      cargo: f.cargo ?? '',
-      nascimento: f.nascimento ?? '',
-      ativo: f.ativo,
-      lid: f.lid
-    }
-    return a.html(rep, paginaFuncionario(form, a.usuario(req), null))
+    const erro = req.query.erro ? String(req.query.erro).slice(0, 200) : null
+    return a.html(rep, paginaFuncionario(formDe(f), a.usuario(req), erro, b.nomesDeLojas(), perfilDe(f), mensagemOk(req.query.ok)))
   })
 
   app.post<{ Body: CorpoFuncionario }>('/equipe/salvar', async (req, rep) => {
-    const b = req.body ?? {}
-    const id = b.id && /^\d+$/.test(b.id) ? Number(b.id) : null
+    const corpo = req.body ?? {}
+    const id = corpo.id && /^\d+$/.test(corpo.id) ? Number(corpo.id) : null
     const atual = id ? g.funcionario(id) : null
     if (id && !atual) return rep.code(404).send('Pessoa não encontrada')
     const form: FormFuncionario = {
       id,
-      nome: b.nome ?? '',
-      telefone: b.telefone ?? '',
-      setor: b.setor ?? '',
-      loja: b.loja ?? '',
-      cargo: b.cargo ?? '',
-      nascimento: b.nascimento ?? '',
-      ativo: b.ativo === '1',
+      nome: corpo.nome ?? '',
+      telefone: corpo.telefone ?? '',
+      setor: corpo.setor ?? '',
+      loja: corpo.loja ?? '',
+      cargo: corpo.cargo ?? '',
+      nascimento: corpo.nascimento ?? '',
+      ativo: corpo.ativo === '1',
       lid: atual?.lid ?? null
     }
     try {
@@ -130,26 +201,14 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
       if (dono && dono.id !== id) throw new ErroEquipe(`esse telefone já é de ${dono.nome}`)
       d.repo.transacao(() => {
         const salvo = g.salvarFuncionario(id, dados, a.agora())
-        d.repo.auditar(a.usuario(req), id ? 'editar_funcionario' : 'criar_funcionario', `${salvo} ${dados.nome}`, a.agora())
+        if (atual?.confirmadoEm && atual.telefone !== dados.telefone) g.desconfirmarFuncionario(salvo, a.agora())
+        d.repo.auditar(a.usuario(req), id ? 'editar_funcionario' : 'criar_funcionario', `${salvo} ${dados.nome}`, a.agora(), salvo)
       })
       return rep.redirect('/equipe?salvo=1', 303)
     } catch (e) {
       if (!(e instanceof ErroEquipe)) throw e
-      return a.html(rep.code(400), paginaFuncionario(form, a.usuario(req), e.message))
+      return a.html(rep.code(400), paginaFuncionario(form, a.usuario(req), e.message, b.nomesDeLojas(), atual ? perfilDe(atual) : null))
     }
-  })
-
-  app.post<{ Params: { id: string }; Body: { ativo?: string } }>('/equipe/:id/gestor', async (req, rep) => {
-    const f = porId(req.params.id)
-    if (!f) return rep.code(404).send('Pessoa não encontrada')
-    const ativo = req.body?.ativo === '1'
-    if (ativo && !f.ativo) return rep.code(409).send('Cadastro inativo não pode ser gestor.')
-    d.repo.transacao(() => {
-      if (ativo) g.adicionarGestor(f.id, `painel:${a.usuario(req)}`, a.agora())
-      else g.removerGestor(f.id)
-      d.repo.auditar(a.usuario(req), ativo ? 'gestor_adicionado' : 'gestor_removido', `#${f.id} ${f.nome}`, a.agora())
-    })
-    return rep.redirect('/equipe', 303)
   })
 
   app.post<{ Params: { id: string } }>('/equipe/:id/excluir', async (req, rep) => {
@@ -159,7 +218,7 @@ export function rotasEquipe(app: FastifyInstance, d: DependenciasPainel, a: Ajud
       g.excluirFuncionario(f.id)
       // Só o id neste registro: o nome não é repetido na exclusão. Registros anteriores da mesma pessoa
       // (criar, editar, gestor) continuam com o nome: a auditoria não é apagada nem reescrita.
-      d.repo.auditar(a.usuario(req), 'excluir_funcionario', `#${f.id}`, a.agora())
+      d.repo.auditar(a.usuario(req), 'excluir_funcionario', `#${f.id}`, a.agora(), f.id)
     })
     return rep.redirect('/equipe?excluido=1', 303)
   })

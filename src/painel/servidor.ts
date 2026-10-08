@@ -6,6 +6,7 @@ import type { Logger } from 'pino'
 import type { ArmazemArquivos } from '../arquivos.js'
 import { botModelo, paraEditor, prepararBot, type FonteBots } from '../config/bots.js'
 import type { StatusProcesso } from '../config/tipos.js'
+import type { RepoBotsGrupos } from '../db/bots-grupos.js'
 import type { RepoGrupos } from '../db/grupos.js'
 import type { Numero, RepoNumeros } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
@@ -13,8 +14,12 @@ import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { LimiteLogin, senhaConfere } from './auth.js'
 import { paginaEditorBot } from './editor.js'
 import { gerarZip } from './exportar.js'
-import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude } from './paginas.js'
+import { comandosDoBot } from '../grupos/catalogo.js'
+import { COMANDOS } from '../grupos/comandos.js'
+import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude, type ResumoBotGrupos } from './paginas.js'
+import { rotasBotGrupos } from './rotas-bot-grupos.js'
 import { rotasEquipe } from './rotas-equipe.js'
+import { rotasGrupos } from './rotas-grupos.js'
 import { rotasNumeros } from './rotas-numeros.js'
 
 /** O que o painel controla nas conexões (o GerenciadorConexoes, em produção). */
@@ -30,6 +35,9 @@ export interface DependenciasPainel {
   bots: FonteBots
   numeros: RepoNumeros
   grupos: RepoGrupos
+  botsGrupos: RepoBotsGrupos
+  /** Relê os participantes de um grupo recém-ativado; false se o número do bot não está conectado. */
+  sincronizarGrupo?: (botId: number, jid: string) => Promise<boolean>
   armazem: ArmazemArquivos
   conexoes: ControleConexoes
   log: Logger
@@ -126,6 +134,27 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
     return atual ? [...ativos, atual] : ativos
   }
 
+  /** Bots de grupos com o que a lista da página Bots mostra. */
+  const resumoBotsGrupos = (): ResumoBotGrupos[] =>
+    d.botsGrupos.bots().map((bot) => {
+      const n = bot.numeroId ? d.numeros.numero(bot.numeroId) : null
+      const estado = n?.ativo ? d.conexoes.estado(n.id) : null
+      const gestores = d.botsGrupos.gestores(bot.id)
+      const cmds = comandosDoBot(d.botsGrupos.comandos(bot.id))
+      return {
+        id: bot.id,
+        nome: bot.nome,
+        ativo: bot.ativo,
+        numero: n ? { nome: n.nome, ativo: n.ativo, status: estado?.status ?? null, telefone: estado?.numero ?? null } : null,
+        gruposAtivos: d.botsGrupos.gruposAtivos(bot.id).length,
+        lojas: d.botsGrupos.lojas(bot.id).length,
+        gestoresConfirmados: gestores.filter((x) => x.confirmadoEm).length,
+        gestoresPendentes: gestores.filter((x) => !x.confirmadoEm).length,
+        comandosLigados: COMANDOS.filter((c) => !c.oculto && !cmds.desligados.has(c.nome)).length + cmds.personalizados.length,
+        personalizados: cmds.personalizados.length
+      }
+    })
+
   app.get<{ Querystring: { salvo?: string; excluido?: string } }>('/', async (req, rep) => {
     const aviso = req.query.salvo ? `Bot ${req.query.salvo} salvo.` : req.query.excluido ? `Bot ${req.query.excluido} excluído.` : null
     // Todos os números de recrutamento entram aqui (mesmo desativados), para o aviso claro de cada bot.
@@ -133,7 +162,7 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
       .listar()
       .filter((n) => n.papel === 'recrutamento')
       .map((n) => ({ id: n.id, nome: n.nome, ativo: n.ativo, telefone: n.ativo ? d.conexoes.estado(n.id)?.numero ?? null : null }))
-    return html(rep, paginaProcessos(d.bots.get(), d.repo.resumoPorProcesso(), numeros, usuario(req), agora(), aviso))
+    return html(rep, paginaProcessos(d.bots.get(), d.repo.resumoPorProcesso(), numeros, usuario(req), agora(), aviso, resumoBotsGrupos()))
   })
 
   // --- bots ---------------------------------------------------------------------------
@@ -287,6 +316,8 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
 
   rotasNumeros(app, d, { html, usuario, agora })
   rotasEquipe(app, d, { html, usuario, agora })
+  rotasGrupos(app, d, { html, usuario, agora })
+  rotasBotGrupos(app, d, { html, usuario, agora })
 
   return app
 }

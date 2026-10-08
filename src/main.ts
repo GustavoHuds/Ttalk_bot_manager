@@ -141,6 +141,8 @@ const painel = await criarPainel({
   repo,
   numeros,
   grupos,
+  botsGrupos,
+  sincronizarGrupo: (botId, jid) => orquestradorGrupos.sincronizarGrupo(botId, jid),
   bots: config,
   armazem,
   log,

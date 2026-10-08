@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { ArmazemArquivos } from '../src/arquivos.js'
 import { FonteBots } from '../src/config/bots.js'
 import { abrirBanco } from '../src/db/banco.js'
+import { RepoBotsGrupos } from '../src/db/bots-grupos.js'
 import type { Funcionario } from '../src/db/grupos.js'
 import { RepoGrupos } from '../src/db/grupos.js'
 import { RepoNumeros } from '../src/db/numeros.js'
@@ -108,10 +109,14 @@ describe('painel: equipe (telefone, CSV e auditoria)', () => {
     const repo = new Repositorio(abrirBanco(':memory:'))
     const numeros = new RepoNumeros(repo.db)
     const grupos = new RepoGrupos(repo.db)
+    const bots = new RepoBotsGrupos(repo.db)
+    numeros.criar('Avisos', 'grupos', AGORA)
+    const bot = bots.criarBot('Avisos', 2, AGORA)
     const app = await criarPainel({
       repo,
       numeros,
       grupos,
+      botsGrupos: bots,
       bots: new FonteBots(repo, padrao),
       relogio: () => AGORA,
       armazem: new ArmazemArquivos(pastaTemp()),
@@ -130,21 +135,22 @@ describe('painel: equipe (telefone, CSV e auditoria)', () => {
     })
     const r = await app.inject({ method: 'POST', url: '/login', payload: 'usuario=rh&senha=senha-bem-longa', headers: form })
     const cookie = `sessao=${r.cookies.find((x) => x.name === 'sessao')!.value}`
-    return { app, repo, grupos, cookie }
+    return { app, repo, grupos, bots, bot, cookie }
   }
 
   const post = (app: FastifyInstance, cookie: string, url: string, payload: Record<string, string>) =>
     app.inject({ method: 'POST', url, headers: { ...form, cookie }, payload: new URLSearchParams(payload).toString() })
 
   it('auditoria de gestor leva o id e o nome; exclusão só leva o id (sem prender o nome na auditoria)', async () => {
-    const { app, repo, grupos, cookie } = await painelDeEquipe()
+    const { app, repo, grupos, bot, cookie } = await painelDeEquipe()
     const ana = grupos.salvarFuncionario(
       null,
       { nome: 'Ana Souza', telefone: '5583999990001', lid: null, setor: null, loja: null, cargo: null, nascimento: null, ativo: true },
       AGORA
     )
-    await post(app, cookie, `/equipe/${ana}/gestor`, { ativo: '1' })
-    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'gestor_adicionado', detalhe: `#${ana} Ana Souza` })
+    await post(app, cookie, `/grupos-bot/${bot}/gestores`, { funcionario_id: String(ana) })
+    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'gestor_indicado', detalhe: 'Ana Souza no Avisos' })
+    expect(repo.auditoriaDaPessoa(ana, 1)[0]).toMatchObject({ acao: 'gestor_indicado' })
     await post(app, cookie, `/equipe/${ana}/excluir`, {})
     expect(repo.auditoriaRecente(1)[0]).toMatchObject({ acao: 'excluir_funcionario', detalhe: `#${ana}` })
   })
@@ -171,18 +177,22 @@ describe('painel: equipe (telefone, CSV e auditoria)', () => {
     })
   })
 
-  it('gestor que ficou inativo aparece como "gestor (inativo)" na lista da equipe', async () => {
-    const { app, grupos, cookie } = await painelDeEquipe()
+  it('gestor que ficou inativo sai da lista padrão e aparece no filtro de inativas, ainda marcado como gestor', async () => {
+    const { app, grupos, bots, bot, cookie } = await painelDeEquipe()
     const id = grupos.salvarFuncionario(
       null,
       { nome: 'Ana Souza', telefone: '5583999990001', lid: null, setor: null, loja: null, cargo: null, nascimento: null, ativo: true },
       AGORA
     )
-    grupos.adicionarGestor(id, 'painel:rh', AGORA)
+    bots.indicarGestor(bot, id, 'painel:rh', AGORA)
+    bots.confirmarGestor(bot, id, '5583999990001@s.whatsapp.net', AGORA)
     // sem o campo "ativo" no corpo: validarFuncionario entende como desmarcado e desativa o cadastro.
     await post(app, cookie, '/equipe/salvar', { id: String(id), nome: 'Ana Souza', telefone: '83999990001' })
-    const pagina = await app.inject({ url: '/equipe', headers: { cookie } })
-    expect(pagina.body).toContain('👔 gestor (inativo)')
+    expect((await app.inject({ url: '/equipe', headers: { cookie } })).body).not.toContain('Ana Souza')
+    const inativas = (await app.inject({ url: '/equipe?situacao=inativos', headers: { cookie } })).body
+    expect(inativas).toContain('Ana Souza')
+    expect(inativas).toContain('👔 Avisos ✅')
+    expect(inativas).toContain('inativo')
   })
 
   it('nome com tentativa de XSS fica escapado na prévia e no textarea escondido do CSV', async () => {
@@ -212,15 +222,15 @@ describe('painel: equipe (telefone, CSV e auditoria)', () => {
   })
 
   it('excluir um gestor remove também o vínculo de gestor (cascata)', async () => {
-    const { app, grupos, cookie } = await painelDeEquipe()
+    const { app, grupos, bots, bot, cookie } = await painelDeEquipe()
     const id = grupos.salvarFuncionario(
       null,
       { nome: 'Ana Souza', telefone: '5583999990001', lid: null, setor: null, loja: null, cargo: null, nascimento: null, ativo: true },
       AGORA
     )
-    grupos.adicionarGestor(id, 'painel:rh', AGORA)
-    expect(grupos.gestores()).toEqual([id])
+    bots.indicarGestor(bot, id, 'painel:rh', AGORA)
+    expect(bots.gestores(bot)).toHaveLength(1)
     await post(app, cookie, `/equipe/${id}/excluir`, {})
-    expect(grupos.gestores()).toEqual([])
+    expect(bots.gestores(bot)).toEqual([])
   })
 })

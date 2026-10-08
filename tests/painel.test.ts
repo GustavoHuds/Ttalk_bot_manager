@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { ArmazemArquivos } from '../src/arquivos.js'
 import { FonteBots, botModelo } from '../src/config/bots.js'
 import { abrirBanco } from '../src/db/banco.js'
+import { RepoBotsGrupos } from '../src/db/bots-grupos.js'
 import { RepoGrupos } from '../src/db/grupos.js'
 import type { Numero } from '../src/db/numeros.js'
 import { RepoNumeros } from '../src/db/numeros.js'
@@ -47,6 +48,7 @@ async function painelComBot(repo: Repositorio, armazem: ArmazemArquivos, conexoe
     repo,
     numeros: new RepoNumeros(repo.db),
     grupos: new RepoGrupos(repo.db),
+    botsGrupos: new RepoBotsGrupos(repo.db),
     bots,
     relogio: () => AGORA,
     armazem,
@@ -495,28 +497,17 @@ describe('grupos e equipe', () => {
     cookie = await login(app)
   })
 
-  it('/grupos lista por número e grava setor e loja com auditoria', async () => {
-    expect((await app.inject({ url: '/grupos', headers: { cookie } })).body).toContain('Loja Centro')
-    const r = await post('/grupos/etiquetar', { numero_id: '2', jid: '120363-1@g.us', setor: 'Vendas', loja: 'Centro' })
-    expect(r.statusCode).toBe(303)
-    expect(grupos.grupo(2, '120363-1@g.us')).toMatchObject({ setor: 'Vendas', loja: 'Centro' })
-    expect(repo.auditoriaRecente(1)[0]).toMatchObject({ usuario: 'rh', acao: 'etiquetar_grupo' })
-    expect((await post('/grupos/etiquetar', { numero_id: '2', jid: 'nao@g.us', setor: '', loja: '' })).statusCode).toBe(404)
-  })
-
-  it('cadastro pelo painel: telefone normalizado, repetido recusado, gestor e exclusão auditados', async () => {
+  it('cadastro pelo painel: telefone normalizado, repetido recusado, exclusão auditada', async () => {
     expect((await post('/equipe/salvar', { nome: 'Ana Souza', telefone: '(83) 99999-0001', setor: 'Vendas', loja: 'Centro', ativo: '1' })).statusCode).toBe(303)
     const ana = grupos.porTelefone('5583999990001')!
     expect(ana).toMatchObject({ nome: 'Ana Souza', ativo: true })
     const repetido = await post('/equipe/salvar', { nome: 'Outra Pessoa', telefone: '83999990001', ativo: '1' })
     expect(repetido.statusCode).toBe(400)
     expect(repetido.body).toContain('já é de Ana Souza')
-    expect((await post(`/equipe/${ana.id}/gestor`, { ativo: '1' })).statusCode).toBe(303)
-    expect(grupos.gestores()).toEqual([ana.id])
-    expect((await app.inject({ url: '/equipe?q=souza', headers: { cookie } })).body).toContain('👔 gestor')
+    expect((await app.inject({ url: '/equipe?q=souza', headers: { cookie } })).body).toContain('⚠ nunca visto')
     expect((await post(`/equipe/${ana.id}/excluir`, {})).statusCode).toBe(303)
     expect(grupos.funcionarios()).toEqual([])
-    expect(repo.auditoriaRecente(4).map((l) => l.acao)).toEqual(['excluir_funcionario', 'gestor_adicionado', 'criar_funcionario', 'login'])
+    expect(repo.auditoriaRecente(3).map((l) => l.acao)).toEqual(['excluir_funcionario', 'criar_funcionario', 'login'])
   })
 
   it('importação CSV: prévia com erro por linha, confirma só as válidas e atualiza quem já existe', async () => {

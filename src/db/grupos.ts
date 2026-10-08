@@ -219,6 +219,11 @@ export class RepoGrupos {
     this.db.prepare(`UPDATE funcionarios SET confirmado_em = ?, atualizado_em = ? WHERE id = ?`).run(agora, agora, id)
   }
 
+  /** O telefone mudou pelo painel: a confirmação antiga não prova mais nada sobre o número novo. */
+  desconfirmarFuncionario(id: number, agora: number): void {
+    this.db.prepare(`UPDATE funcionarios SET confirmado_em = NULL, atualizado_em = ? WHERE id = ?`).run(agora, id)
+  }
+
   excluirFuncionario(id: number): boolean {
     return this.db.prepare(`DELETE FROM funcionarios WHERE id = ?`).run(id).changes === 1
   }

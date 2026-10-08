@@ -26,6 +26,22 @@ button.perigo{color:var(--erro)}button.primario,.botao.primario{background:var(-
 input,select,textarea{font:inherit;padding:8px;border:1px solid var(--borda);border-radius:6px;width:100%;background:var(--fundo);color:var(--texto)}
 code{font-size:.85em;word-break:break-all}.etiqueta{font-size:.8rem;padding:2px 8px;border-radius:99px;border:1px solid currentColor}
 dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}dt{color:var(--suave)}dd{margin:0}
+.topo{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}.topo h1{margin:0}
+.linha{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.linha form{margin:0}
+.abas{display:flex;gap:2px;border-bottom:1px solid var(--borda);margin:0 0 16px;overflow-x:auto}
+.abas a{padding:8px 14px;text-decoration:none;color:var(--suave);border-bottom:2px solid transparent;white-space:nowrap}
+.abas a:hover{color:var(--texto)}.abas a.atual{color:var(--texto);border-bottom-color:var(--marca);font-weight:600}
+.selo{display:inline-flex;align-items:center;gap:4px;font-size:.8rem;line-height:1.4;padding:1px 8px;border-radius:99px;border:1px solid var(--borda);color:var(--suave);white-space:nowrap}
+.selo.ok{color:var(--ok);border-color:currentColor}.selo.alerta{color:var(--alerta);border-color:currentColor}.selo.erro{color:var(--erro);border-color:currentColor}
+.numeros{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.numeros .cartao{margin:0}.numeros strong{display:block;font-size:1.6rem;line-height:1.2}.numeros span{color:var(--suave);font-size:.85rem}
+.codigo{font:600 1.5rem/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.12em}
+.cartao.destaque{border-color:var(--marca)}.cartao.aviso{border-color:var(--alerta)}
+.ajuda{color:var(--suave);font-size:.9rem;margin:4px 0 0}
+ol.passos{margin:0;padding-left:20px}ol.passos li{margin:4px 0}
+.formgrade{display:grid;gap:12px;max-width:560px}
+.vazio{text-align:center;padding:24px 16px;color:var(--suave)}
+@media (max-width:640px){th,td{padding:6px}.esconde-celular{display:none}}
 `
 
 export function layout(titulo: string, corpo: string, usuario: string | null, extraHead = ''): string {
@@ -36,6 +52,26 @@ export function layout(titulo: string, corpo: string, usuario: string | null, ex
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(titulo)} · Ttalk Bot Manager</title><meta name="robots" content="noindex">${extraHead}<style>${CSS}</style></head>
 <body><header><strong>Ttalk Bot Manager</strong>${nav}</header><main>${corpo}</main></body></html>`
+}
+
+/** Selo colorido: ok (verde), alerta (laranja), erro (vermelho) ou neutro. */
+export function selo(texto: string, tom: 'ok' | 'alerta' | 'erro' | '' = ''): string {
+  return `<span class="selo${tom ? ` ${tom}` : ''}">${esc(texto)}</span>`
+}
+
+/** Abas de uma página com sub-páginas. `atual` é o href da aba aberta. */
+export function abas(itens: { href: string; rotulo: string }[], atual: string): string {
+  return `<nav class="abas">${itens.map((i) => `<a href="${esc(i.href)}"${i.href === atual ? ' class="atual" aria-current="page"' : ''}>${esc(i.rotulo)}</a>`).join('')}</nav>`
+}
+
+/** Faixa de números-resumo no topo de uma página. */
+export function resumo(itens: { valor: string | number; rotulo: string }[]): string {
+  return `<div class="numeros">${itens.map((i) => `<div class="cartao"><strong>${esc(i.valor)}</strong><span>${esc(i.rotulo)}</span></div>`).join('')}</div>`
+}
+
+/** Mensagem de sucesso (verde) ou erro (vermelho) no topo de uma página. */
+export function mensagem(ok: string | null, erro: string | null = null): string {
+  return `${ok ? `<div class="cartao ok" role="status">${esc(ok)}</div>` : ''}${erro ? `<div class="cartao erro" role="alert">${esc(erro)}</div>` : ''}`
 }
 
 export function paginaLogin(erro: string | null): string {
@@ -63,6 +99,36 @@ export function linkWaMe(numero: string, codigo: string): string {
   return `https://wa.me/${numero}?text=${encodeURIComponent(`Quero me candidatar [${codigo}]`)}`
 }
 
+/** Bot de grupos como a lista de bots mostra. */
+export interface ResumoBotGrupos {
+  id: number
+  nome: string
+  ativo: boolean
+  /** Número que o bot usa agora, com o status da conexão; null = sem número. */
+  numero: { nome: string; ativo: boolean; status: string | null; telefone: string | null } | null
+  gruposAtivos: number
+  lojas: number
+  gestoresConfirmados: number
+  gestoresPendentes: number
+  comandosLigados: number
+  personalizados: number
+}
+
+function linhaBotGrupos(b: ResumoBotGrupos): string {
+  const numero = !b.numero
+    ? selo('sem número', 'erro')
+    : !b.numero.ativo
+      ? `${esc(b.numero.nome)} ${selo('número desativado', 'erro')}`
+      : `${esc(b.numero.nome)} ${selo(ROTULO_STATUS[b.numero.status ?? 'iniciando'] ?? 'iniciando', b.numero.status === 'conectado' ? 'ok' : 'alerta')}${b.numero.telefone ? `<br><span class="suave">+${esc(b.numero.telefone)}</span>` : ''}`
+  const gestores = `${b.gestoresConfirmados} ✅${b.gestoresPendentes ? ` · ${b.gestoresPendentes} ⏳` : ''}`
+  return `<tr${b.ativo ? '' : ' class="suave"'}><td><a href="/grupos-bot/${b.id}"><strong>${esc(b.nome)}</strong></a>${b.ativo ? '' : `<br>${selo('desativado')}`}</td>
+    <td>${numero}</td>
+    <td><a href="/grupos?bot=${b.id}">${b.gruposAtivos} ativo(s)</a><br><span class="suave">${b.lojas} loja(s)</span></td>
+    <td><a href="/grupos-bot/${b.id}/gestores">${gestores}</a></td>
+    <td><a href="/grupos-bot/${b.id}/comandos">${b.comandosLigados} ligados</a>${b.personalizados ? `<br><span class="suave">${b.personalizados} personalizado(s)</span>` : ''}</td>
+    <td style="white-space:nowrap"><a class="botao" href="/grupos-bot/${b.id}">Abrir</a></td></tr>`
+}
+
 /** Número de recrutamento como a lista de bots precisa: nome, se está ativo e telefone conectado. */
 export interface NumeroDosBots {
   id: number
@@ -77,7 +143,8 @@ export function paginaProcessos(
   numeros: NumeroDosBots[],
   usuario: string,
   agora: number,
-  aviso: string | null = null
+  aviso: string | null = null,
+  botsGrupos: ResumoBotGrupos[] = []
 ): string {
   const linhas = config.processos
     .map((p) => {
@@ -115,13 +182,18 @@ export function paginaProcessos(
       return `<p class="suave">Contato direto pelo ${esc(n.nome)} (<code>https://wa.me/${esc(n.telefone)}</code>): ${destino}</p>`
     })
     .join('')
+  const grupos = botsGrupos.map(linhaBotGrupos).join('')
   return layout(
     'Bots',
-    `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h1>Bots de recrutamento</h1>
-      <a class="botao primario" href="/bots/novo">+ Novo bot</a></div>
-    ${aviso ? `<div class="cartao ok">${esc(aviso)}</div>` : ''}${erros}
+    `${aviso ? `<div class="cartao ok">${esc(aviso)}</div>` : ''}
+    <div class="topo"><h1>Bots de recrutamento</h1><a class="botao primario" href="/bots/novo">+ Novo bot</a></div>
+    ${erros}
     <div class="cartao"><table><thead><tr><th>Vaga</th><th>Situação</th><th>Período</th><th>Candidaturas</th><th>Link de divulgação</th><th></th></tr></thead>
-    <tbody>${linhas || '<tr><td colspan="6" class="suave">Nenhum bot ainda. Clique em "+ Novo bot".</td></tr>'}</tbody></table></div>${direto}${orfaos}`,
+    <tbody>${linhas || '<tr><td colspan="6" class="suave">Nenhum bot ainda. Clique em "+ Novo bot".</td></tr>'}</tbody></table></div>${direto}${orfaos}
+    <div class="topo" style="margin-top:32px"><h1>Bots de grupos</h1><a class="botao primario" href="/grupos-bot/novo">+ Bot de grupos</a></div>
+    <div class="cartao"><p class="ajuda" style="margin:0 0 8px">Atendem comandos nos grupos ativos da empresa. Cada um tem as suas lojas, gestores e comandos.</p>
+    <table><thead><tr><th>Bot</th><th>Número</th><th>Grupos</th><th>Gestores</th><th>Comandos</th><th></th></tr></thead>
+    <tbody>${grupos || '<tr><td colspan="6" class="vazio">Nenhum bot de grupos ainda. Clique em "+ Bot de grupos".</td></tr>'}</tbody></table></div>`,
     usuario
   )
 }
