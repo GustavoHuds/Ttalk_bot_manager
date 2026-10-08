@@ -7,6 +7,7 @@ import { FonteBots } from './config/bots.js'
 import { lerPadrao, lerYamlProcessos } from './config/carregar.js'
 import { Orquestrador } from './conversa/orquestrador.js'
 import { abrirBanco } from './db/banco.js'
+import { RepoBotsGrupos } from './db/bots-grupos.js'
 import { RepoGrupos } from './db/grupos.js'
 import { RepoNumeros } from './db/numeros.js'
 import { Repositorio } from './db/repositorio.js'
@@ -32,6 +33,7 @@ const db = abrirBanco(join(amb.dados, 'banco.sqlite'))
 const repo = new Repositorio(db)
 const numeros = new RepoNumeros(db)
 const grupos = new RepoGrupos(db)
+const botsGrupos = new RepoBotsGrupos(db)
 const armazem = new ArmazemArquivos(amb.dados)
 // Só depois da migração do banco: a sessão de antes vira a do número 1.
 if (await moverSessaoAntiga(amb.dados)) log.info('sessão do WhatsApp movida para sessoes/1')
@@ -63,7 +65,9 @@ const orquestrador = new Orquestrador({
 const orquestradorGrupos = new OrquestradorGrupos({
   repo,
   grupos,
+  bots: botsGrupos,
   conexao: (numeroId) => gerenciador.conexao(numeroId),
+  telefoneDoNumero: (numeroId) => gerenciador.estado(numeroId)?.numero ?? null,
   log,
   conectadoDesde: (numeroId) => {
     const e = gerenciador.estado(numeroId)

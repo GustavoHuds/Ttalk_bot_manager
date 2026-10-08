@@ -153,13 +153,20 @@ export function infoDoGrupo(g: GroupMetadata, eu: string[]): InfoGrupo {
 
 /** Participantes sem o próprio bot. */
 export function membrosDoGrupo(g: GroupMetadata, eu: string[]): MembroGrupo[] {
-  return (g.participants ?? [])
-    .filter((p) => !souEu(eu, p))
-    .map((p) => {
-      const id = jidNormalizedUser(p.id)
-      const pn = p.phoneNumber ? jidNormalizedUser(p.phoneNumber) : null
-      return { jid: id, telefone: telefoneDoJid(id) ?? telefoneDoJid(pn), lid: lidDe(p.id, p.lid), admin: !!p.admin }
-    })
+  return (g.participants ?? []).filter((p) => !souEu(eu, p)).map((p) => membroDe(p, !!p.admin))
+}
+
+/** Participante (da lista do grupo ou de um evento) como o bot guarda: identidade e admin. */
+export function membroDe(p: Participante, admin: boolean): MembroGrupo {
+  const o = typeof p === 'string' ? { id: p } : p
+  const id = jidNormalizedUser(o.id)
+  const pn = o.phoneNumber ? jidNormalizedUser(o.phoneNumber) : null
+  return { jid: id, telefone: telefoneDoJid(id) ?? telefoneDoJid(pn), lid: lidDe(o.id, o.lid), admin }
+}
+
+/** Evento de entrada/saída/admin de outras pessoas (o próprio bot fica de fora). */
+export function membrosDoEvento(participantes: Participante[], acao: string, eu: string[]): MembroGrupo[] {
+  return participantes.filter((p) => !souEu(eu, p)).map((p) => membroDe(p, acao === 'promote'))
 }
 
 /**

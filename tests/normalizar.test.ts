@@ -5,6 +5,7 @@ import {
   comandoDaMensagem,
   infoDoGrupo,
   jidIgnoradoGrupos,
+  membrosDoEvento,
   membrosDoGrupo,
   mencoesDaMensagem,
   origemComando,
@@ -122,6 +123,16 @@ describe('bot de grupos: leitura das mensagens', () => {
       ehGrupo: true,
       remetente: { jid: '5583999990001@s.whatsapp.net', telefone: '5583999990001', lid: '111@lid' }
     })
+  })
+
+  it('participantes de um evento: sem o próprio bot, com telefone quando vem, admin só no promote', () => {
+    const eu = ['5583900000000@s.whatsapp.net', '888@lid']
+    const ps = [{ id: '888@lid' }, { id: '111@lid', phoneNumber: '5583999990001@s.whatsapp.net' }, '5583999990002@s.whatsapp.net']
+    expect(membrosDoEvento(ps, 'add', eu)).toEqual([
+      { jid: '111@lid', telefone: '5583999990001', lid: '111@lid', admin: false },
+      { jid: '5583999990002@s.whatsapp.net', telefone: '5583999990002', lid: null, admin: false }
+    ])
+    expect(membrosDoEvento(['222@lid'], 'promote', eu)).toEqual([{ jid: '222@lid', telefone: null, lid: '222@lid', admin: true }])
   })
 
   it('souEu também reconhece o participante pelo campo lid do objeto (não só id/phoneNumber)', () => {

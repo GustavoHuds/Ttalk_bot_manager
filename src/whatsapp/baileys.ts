@@ -28,6 +28,7 @@ import {
   infoDoGrupo,
   jidIgnorado,
   jidIgnoradoGrupos,
+  membrosDoEvento,
   membrosDoGrupo,
   opcoesVotadas,
   paraNumero,
@@ -282,6 +283,12 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
     })
     sock.ev.on('group-participants.update', (u) => {
       this.esquecerGrupo(u.id)
+      // Mudanças nos outros: o orquestrador só guarda se o grupo estiver ativo no bot.
+      const acao = u.action
+      if (acao === 'add' || acao === 'remove' || acao === 'promote' || acao === 'demote') {
+        const membros = membrosDoEvento(u.participants, acao, this.eu())
+        if (membros.length) emitir({ tipo: 'participantes', jid: u.id, acao, membros })
+      }
       if (!u.participants.some((p) => souEu(this.eu(), p))) return
       if (u.action === 'remove') emitir({ tipo: 'saiu', jid: u.id })
       else if (u.action === 'promote' || u.action === 'demote') emitir({ tipo: 'admin', jid: u.id, admin: u.action === 'promote' })
