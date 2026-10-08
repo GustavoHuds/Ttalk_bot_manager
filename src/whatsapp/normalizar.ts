@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import {
+  BufferJSON,
+  getContentType,
   isJidBroadcast,
   isJidGroup,
   isJidNewsletter,
@@ -10,10 +12,11 @@ import {
   jidNormalizedUser,
   normalizeMessageContent,
   type GroupMetadata,
-  type WAMessage
+  type WAMessage,
+  type proto
 } from '@whiskeysockets/baileys'
-import { ehComando } from '../grupos/comandos.js'
-import type { InfoGrupo, MembroGrupo, MensagemGrupo, Pessoa } from '../grupos/tipos.js'
+import type { TipoMidia } from '../db/bots-grupos.js'
+import type { Citacao, InfoGrupo, MembroGrupo, MensagemGrupo, Pessoa } from '../grupos/tipos.js'
 import type { Entrada } from '../conversa/tipos.js'
 
 /** Números do Baileys podem chegar como Long. */
@@ -107,10 +110,59 @@ export function jidIgnoradoGrupos(jid: string | null | undefined): boolean {
   return !jid || !!isJidBroadcast(jid) || !!isJidStatusBroadcast(jid) || !!isJidNewsletter(jid)
 }
 
-/** Só o texto digitado (comandos não vêm em legenda de foto). */
+/** Texto digitado ou legenda (de foto, vídeo ou documento). */
+export function textoDoConteudo(c: proto.IMessage | null | undefined): string | null {
+  if (!c) return null
+  return (
+    c.conversation ||
+    c.extendedTextMessage?.text ||
+    c.imageMessage?.caption ||
+    c.videoMessage?.caption ||
+    c.documentMessage?.caption ||
+    null
+  )
+}
+
 export function textoDaMensagem(msg: WAMessage): string | null {
-  const c = normalizeMessageContent(msg.message)
-  return c?.conversation || c?.extendedTextMessage?.text || null
+  return textoDoConteudo(normalizeMessageContent(msg.message))
+}
+
+/** Tipo de mídia que o bot sabe reenviar, ou null. */
+export function tipoDeMidia(c: proto.IMessage | null | undefined): TipoMidia | null {
+  if (!c) return null
+  if (c.imageMessage) return 'imagem'
+  if (c.videoMessage) return 'video'
+  if (c.audioMessage) return 'audio'
+  if (c.documentMessage) return 'documento'
+  return null
+}
+
+const EXTENSOES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'video/mp4': 'mp4',
+  'video/3gpp': '3gp',
+  'audio/ogg': 'ogg',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/aac': 'aac',
+  'application/pdf': 'pdf'
+}
+
+/** Extensão do arquivo pelo tipo (ou pelo nome, quando o tipo não diz). */
+export function extensaoDe(mimetype: string, nome: string | null = null): string {
+  const base = mimetype.split(';')[0]!.trim().toLowerCase()
+  const doNome = nome && /\.([a-z0-9]{1,8})$/i.exec(nome)?.[1]?.toLowerCase()
+  return EXTENSOES[base] ?? doNome ?? 'bin'
+}
+
+/** contextInfo de qualquer tipo de conteúdo (texto, foto, vídeo...). */
+function contexto(c: proto.IMessage | null | undefined): proto.IContextInfo | null {
+  const tipo = c ? getContentType(c) : undefined
+  const parte = tipo ? (c as Record<string, unknown>)[tipo] : null
+  return parte && typeof parte === 'object' && 'contextInfo' in parte ? ((parte as { contextInfo?: proto.IContextInfo }).contextInfo ?? null) : null
 }
 
 function lidDe(...jids: (string | null | undefined)[]): string | null {
@@ -132,11 +184,21 @@ export function origemComando(msg: WAMessage): { chat: string; ehGrupo: boolean;
   return { chat, ehGrupo: true, remetente: { jid: autor, telefone: telefoneDoJid(autor) ?? telefoneDoJid(alt), lid: lidDe(autor, alt) } }
 }
 
-export function mencoesDaMensagem(msg: WAMessage): { mencionados: string[]; citada: string | null } {
-  const info = normalizeMessageContent(msg.message)?.extendedTextMessage?.contextInfo
+export function mencoesDaMensagem(msg: WAMessage): { mencionados: string[]; citada: Citacao | null } {
+  const info = contexto(normalizeMessageContent(msg.message))
   const mencionados = (info?.mentionedJid ?? []).filter((j): j is string => !!j).map((j) => jidNormalizedUser(j))
-  const citada = info?.quotedMessage && info.participant ? jidNormalizedUser(info.participant) : null
-  return { mencionados, citada }
+  if (!info?.quotedMessage) return { mencionados, citada: null }
+  const citada = normalizeMessageContent(info.quotedMessage)
+  const autor = info.participant ? jidNormalizedUser(info.participant) : null
+  // Mídia citada: guarda a mensagem inteira para baixar depois (só se o comando precisar).
+  const midia =
+    tipoDeMidia(citada) && info.stanzaId
+      ? JSON.stringify(
+          { key: { remoteJid: msg.key.remoteJid, id: info.stanzaId, participant: info.participant ?? undefined, fromMe: false }, message: info.quotedMessage },
+          BufferJSON.replacer
+        )
+      : null
+  return { mencionados, citada: { autor, texto: textoDoConteudo(citada), midia } }
 }
 
 type Participante = string | { id: string; lid?: string | undefined; phoneNumber?: string | undefined }
@@ -164,21 +226,18 @@ export function membroDe(p: Participante, admin: boolean): MembroGrupo {
   return { jid: id, telefone: telefoneDoJid(id) ?? telefoneDoJid(pn), lid: lidDe(o.id, o.lid), admin }
 }
 
-/** Evento de entrada/saída/admin de outras pessoas (o próprio bot fica de fora). */
-export function membrosDoEvento(participantes: Participante[], acao: string, eu: string[]): MembroGrupo[] {
-  return participantes.filter((p) => !souEu(eu, p)).map((p) => membroDe(p, acao === 'promote'))
-}
-
 /**
- * Decide se a mensagem é um comando de grupo e já a traduz. Conversa comum (texto que não
- * começa com "/") nunca sai daqui: quem chama não grava nada no banco nem loga o texto.
+ * Mensagem com texto (ou legenda) para o bot de grupos. Quem decide o que fazer — e descarta na hora
+ * o que não for de um grupo ativo — é o orquestrador; nada daqui é gravado nem vai para o log.
  */
-export function comandoDaMensagem(msg: WAMessage, numeroId: number): MensagemGrupo | null {
+export function mensagemDoBotGrupos(msg: WAMessage, numeroId: number): MensagemGrupo | null {
   if (msg.key.fromMe || !msg.key.id || !msg.message) return null
-  const texto = textoDaMensagem(msg)
-  if (!texto || !ehComando(texto)) return null
+  const conteudo = normalizeMessageContent(msg.message)
+  const texto = textoDoConteudo(conteudo)
+  if (!texto) return null
   const origem = origemComando(msg)
   if (!origem) return null
   const recebidaEm = (paraNumero(msg.messageTimestamp) ?? Math.floor(Date.now() / 1000)) * 1000
-  return { numeroId, id: msg.key.id, ...origem, texto, ...mencoesDaMensagem(msg), recebidaEm }
+  const midia = tipoDeMidia(conteudo) ? JSON.stringify(msg, BufferJSON.replacer) : null
+  return { numeroId, id: msg.key.id, ...origem, texto, ...mencoesDaMensagem(msg), midia, recebidaEm }
 }

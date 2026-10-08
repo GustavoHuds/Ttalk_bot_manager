@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { abrirBanco } from '../src/db/banco.js'
 import { Repositorio } from '../src/db/repositorio.js'
-import { Expedidor, duracaoDigitando, type ConexaoEnvio } from '../src/whatsapp/expedidor.js'
+import { Expedidor, type ConexaoEnvio } from '../src/whatsapp/expedidor.js'
 import { AGORA, log } from './ajuda.js'
 
 const JANELA = 24 * 3600_000
@@ -12,7 +12,9 @@ function montar(opcoes: { falhar?: boolean; limitePorMinuto?: number } = {}) {
   const eventos: { em: number; tipo: string; jid: string; texto?: string }[] = []
   const conexao: ConexaoEnvio = {
     pronta: () => true,
-    digitando: async (jid) => void eventos.push({ em: t, tipo: 'digitando', jid }),
+    presenca: async (jid, estado) => {
+      if (estado === 'composing') eventos.push({ em: t, tipo: 'digitando', jid })
+    },
     enviarTexto: async (jid, texto) => {
       if (opcoes.falhar) throw new Error('caiu')
       eventos.push({ em: t, tipo: 'texto', jid, texto })
@@ -26,6 +28,7 @@ function montar(opcoes: { falhar?: boolean; limitePorMinuto?: number } = {}) {
     log,
     janelaMs: 24 * 3600_000,
     relogio: () => t,
+    aleatorio: () => 0,
     esperar: async (ms) => void (t += ms),
     ...(opcoes.limitePorMinuto ? { limitePorMinuto: opcoes.limitePorMinuto } : {})
   })
@@ -45,11 +48,6 @@ describe('expedidor', () => {
     const [, um, , dois] = eventos
     expect(um!.texto).toBe('um')
     expect(dois!.em - um!.em).toBeGreaterThanOrEqual(1500)
-  })
-
-  it('"digitando" dura entre 1 e 4 s conforme o texto', () => {
-    expect(duracaoDigitando('oi')).toBe(1000)
-    expect(duracaoDigitando('x'.repeat(1000))).toBe(4000)
   })
 
   it('nunca inicia conversa: descarta resposta para quem não escreveu dentro da janela', async () => {
@@ -139,7 +137,7 @@ describe('expedidor', () => {
     let prontaFlag = true
     const conexao: ConexaoEnvio = {
       pronta: () => prontaFlag,
-      digitando: async () => {},
+      presenca: async () => {},
       enviarTexto: async () => {
         prontaFlag = false
         throw new Error('caiu')
@@ -169,7 +167,7 @@ describe('expedidor', () => {
     const eventos: string[] = []
     const conexao: ConexaoEnvio = {
       pronta: () => prontaFlag,
-      digitando: async () => void eventos.push('digitando'),
+      presenca: async () => void eventos.push('digitando'),
       enviarTexto: async (jid, texto) => void eventos.push(`texto:${jid}:${texto}`),
       enviarEnquete: async () => {}
     }

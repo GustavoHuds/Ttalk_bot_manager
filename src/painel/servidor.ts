@@ -14,18 +14,16 @@ import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { LimiteLogin, senhaConfere } from './auth.js'
 import { paginaEditorBot } from './editor.js'
 import { gerarZip } from './exportar.js'
-import { comandosDoBot } from '../grupos/catalogo.js'
-import { COMANDOS } from '../grupos/comandos.js'
 import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude, type ResumoBotGrupos } from './paginas.js'
 import { rotasBotGrupos } from './rotas-bot-grupos.js'
-import { rotasEquipe } from './rotas-equipe.js'
-import { rotasGrupos } from './rotas-grupos.js'
 import { rotasNumeros } from './rotas-numeros.js'
 
 /** O que o painel controla nas conexões (o GerenciadorConexoes, em produção). */
 export interface ControleConexoes {
   estado(numeroId: number): EstadoConexao | null
   novaSessao(numeroId: number): Promise<void>
+  /** Desconecta o aparelho no celular e começa uma sessão nova (QR). */
+  revogar(numeroId: number): Promise<void>
   ativar(numero: Numero): Promise<void>
   desativar(numeroId: number): Promise<void>
 }
@@ -36,8 +34,6 @@ export interface DependenciasPainel {
   numeros: RepoNumeros
   grupos: RepoGrupos
   botsGrupos: RepoBotsGrupos
-  /** Relê os participantes de um grupo recém-ativado; false se o número do bot não está conectado. */
-  sincronizarGrupo?: (botId: number, jid: string) => Promise<boolean>
   armazem: ArmazemArquivos
   conexoes: ControleConexoes
   log: Logger
@@ -138,20 +134,16 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
   const resumoBotsGrupos = (): ResumoBotGrupos[] =>
     d.botsGrupos.bots().map((bot) => {
       const n = bot.numeroId ? d.numeros.numero(bot.numeroId) : null
-      const estado = n?.ativo ? d.conexoes.estado(n.id) : null
       const gestores = d.botsGrupos.gestores(bot.id)
-      const cmds = comandosDoBot(d.botsGrupos.comandos(bot.id))
       return {
         id: bot.id,
         nome: bot.nome,
         ativo: bot.ativo,
-        numero: n ? { nome: n.nome, ativo: n.ativo, status: estado?.status ?? null, telefone: estado?.numero ?? null } : null,
+        numero: n ? { nome: n.nome, ativo: n.ativo, pausado: n.pausado, estado: n.ativo ? d.conexoes.estado(n.id) : null } : null,
         gruposAtivos: d.botsGrupos.gruposAtivos(bot.id).length,
-        lojas: d.botsGrupos.lojas(bot.id).length,
         gestoresConfirmados: gestores.filter((x) => x.confirmadoEm).length,
         gestoresPendentes: gestores.filter((x) => !x.confirmadoEm).length,
-        comandosLigados: COMANDOS.filter((c) => !c.oculto && !cmds.desligados.has(c.nome)).length + cmds.personalizados.length,
-        personalizados: cmds.personalizados.length
+        programadas: d.botsGrupos.programadas(bot.id).filter((p) => p.ativa).length
       }
     })
 
@@ -314,9 +306,10 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
 
   app.get('/auditoria', async (req, rep) => html(rep, paginaAuditoria(d.repo.auditoriaRecente(200), usuario(req))))
 
+  // Endereços de antes da reorganização: grupos ficam dentro de cada bot; não há mais cadastro geral.
+  for (const antigo of ['/grupos', '/equipe', '/equipe/*']) app.get(antigo, async (_req, rep) => rep.redirect('/', 303))
+
   rotasNumeros(app, d, { html, usuario, agora })
-  rotasEquipe(app, d, { html, usuario, agora })
-  rotasGrupos(app, d, { html, usuario, agora })
   rotasBotGrupos(app, d, { html, usuario, agora })
 
   return app

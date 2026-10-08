@@ -10,17 +10,13 @@ export interface Grupo {
   atualizadoEm: number
 }
 
+/** Pessoa do cadastro de gestores (o mesmo cadastro serve a todos os bots de grupos). */
 export interface DadosFuncionario {
   nome: string
   /** Chave do telefone: brasileiro canônico (55+DDD+número com o 9) ou dígitos com DDI para outros países. */
   telefone: string | null
   /** JID @lid, quando o WhatsApp esconde o número. Só o WhatsApp o informa. */
   lid: string | null
-  setor: string | null
-  loja: string | null
-  cargo: string | null
-  /** AAAA-MM-DD */
-  nascimento: string | null
   ativo: boolean
 }
 
@@ -53,10 +49,6 @@ interface LinhaFuncionario {
   nome: string
   telefone: string | null
   lid: string | null
-  setor: string | null
-  loja: string | null
-  cargo: string | null
-  nascimento: string | null
   ativo: number
   confirmado_em: number | null
 }
@@ -75,18 +67,14 @@ const funcionarioDe = (l: LinhaFuncionario): Funcionario => ({
   nome: l.nome,
   telefone: l.telefone,
   lid: l.lid,
-  setor: l.setor,
-  loja: l.loja,
-  cargo: l.cargo,
-  nascimento: l.nascimento,
   ativo: l.ativo === 1,
   confirmadoEm: l.confirmado_em
 })
 
-const COLUNAS_FUNCIONARIO = `id, nome, telefone, lid, setor, loja, cargo, nascimento, ativo, confirmado_em`
+const COLUNAS_FUNCIONARIO = `id, nome, telefone, lid, ativo, confirmado_em`
 const COLUNAS_GRUPO = `numero_id, jid, nome, bot_admin, ativo, atualizado_em`
 
-/** Grupos de cada número (lista geral), equipe e caixa de saída do bot de grupos. Usa o mesmo banco (e as mesmas transações) do Repositorio. */
+/** Grupos de cada número (lista geral), cadastro de gestores e caixa de saída do bot de grupos. Usa o mesmo banco (e as mesmas transações) do Repositorio. */
 export class RepoGrupos {
   constructor(private readonly db: Banco) {}
 
@@ -155,7 +143,7 @@ export class RepoGrupos {
     return sairam.length
   }
 
-  // --- equipe ---------------------------------------------------------------------
+  // --- cadastro de gestores ---------------------------------------------------------------------
 
   funcionarios(): Funcionario[] {
     return (
@@ -180,23 +168,17 @@ export class RepoGrupos {
    * Lança erro também se `id` não existir.
    */
   salvarFuncionario(id: number | null, d: DadosFuncionario, agora: number): number {
-    const valores = [d.nome, d.telefone, d.lid, d.setor, d.loja, d.cargo, d.nascimento, d.ativo ? 1 : 0]
+    const valores = [d.nome, d.telefone, d.lid, d.ativo ? 1 : 0]
     if (id === null) {
       const r = this.db
-        .prepare(
-          `INSERT INTO funcionarios (nome, telefone, lid, setor, loja, cargo, nascimento, ativo, criado_em, atualizado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
+        .prepare(`INSERT INTO funcionarios (nome, telefone, lid, ativo, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(...valores, agora, agora)
       return Number(r.lastInsertRowid)
     }
     const r = this.db
-      .prepare(
-        `UPDATE funcionarios SET nome = ?, telefone = ?, lid = ?, setor = ?, loja = ?, cargo = ?, nascimento = ?, ativo = ?,
-           atualizado_em = ? WHERE id = ?`
-      )
+      .prepare(`UPDATE funcionarios SET nome = ?, telefone = ?, lid = ?, ativo = ?, atualizado_em = ? WHERE id = ?`)
       .run(...valores, agora, id)
-    if (r.changes !== 1) throw new Error('funcionário não encontrado')
+    if (r.changes !== 1) throw new Error('pessoa não encontrada')
     return id
   }
 
@@ -246,8 +228,15 @@ export class RepoGrupos {
 
   // --- caixa de saída -------------------------------------------------------------
 
-  enfileirarSaida(numeroId: number, jid: string, conteudo: string, agora: number): void {
-    this.db.prepare(`INSERT INTO saida_grupos (numero_id, jid, conteudo, criada_em) VALUES (?, ?, ?, ?)`).run(numeroId, jid, conteudo, agora)
+  /** `proximaEm` atrasa a saída (espalha envios programados no tempo, em vez de todos no mesmo segundo). */
+  enfileirarSaida(numeroId: number, jid: string, conteudo: string, agora: number, proximaEm = 0): void {
+    this.db
+      .prepare(`INSERT INTO saida_grupos (numero_id, jid, conteudo, criada_em, proxima_em) VALUES (?, ?, ?, ?, ?)`)
+      .run(numeroId, jid, conteudo, agora, proximaEm)
+  }
+
+  saidasPendentes(numeroId: number): number {
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM saida_grupos WHERE numero_id = ?`).get(numeroId) as { n: number }).n
   }
 
   /** Só o jid cuja mensagem mais antiga (a próxima a sair) já está pronta: uma com reenvio agendado segura as de trás. */

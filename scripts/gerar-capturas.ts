@@ -65,17 +65,22 @@ const paginas: Record<string, string> = {
     numeros: [{ id: 1, nome: 'Principal' }]
   }),
   candidatos: paginaProcesso('VEND-OUT26', config.processos[0], candidatos, 'rh'),
+  // O QR chega por JavaScript na tela real; aqui vai direto na imagem.
   conexao: paginaNumero(
-    { id: 1, nome: 'Principal', papel: 'recrutamento', ativo: true, criadoEm: agora },
+    { id: 1, nome: 'Principal', papel: 'recrutamento', ativo: true, pausado: false, criadoEm: agora },
     { status: 'aguardando_qr', qr: 'x', desde: agora, numero: null, motivo: null },
-    qr,
-    'rh'
-  ).replace('<meta http-equiv="refresh" content="5">', ''),
+    [{ nome: 'Vendedor(a) de loja', href: '/bots/VEND-OUT26' }],
+    'rh',
+    null,
+    null
+  )
+    .replace(/<img id="qr-img"([^>]*) hidden>/, `<img id="qr-img" src="${qr}"$1>`)
+    .replace('<span id="qr-texto" class="suave">', '<span id="qr-texto" class="suave" hidden>'),
   saude: paginaSaude(
     {
       numeros: [
         {
-          numero: { id: 1, nome: 'Principal', papel: 'recrutamento', ativo: true, criadoEm: agora },
+          numero: { id: 1, nome: 'Principal', papel: 'recrutamento', ativo: true, pausado: false, criadoEm: agora },
           estado: { status: 'conectado', qr: null, desde: agora - 86400_000, numero, motivo: null },
           ultimaMensagem: agora - 600_000
         }

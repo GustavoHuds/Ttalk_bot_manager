@@ -4,64 +4,159 @@ import type { CandidatoPainel } from '../db/repositorio.js'
 import type { Numero } from '../db/numeros.js'
 import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { colunasDeResposta, dataBR } from './exportar.js'
-import { ROTULO_PAPEL } from './paginas-numeros.js'
 
 export function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 }
 
 const CSS = `
-:root{--fundo:#f6f7f9;--cartao:#fff;--texto:#1d2330;--suave:#5b6474;--borda:#dde1e7;--marca:#0b5cad;--ok:#1a7f37;--alerta:#b54708;--erro:#b42318}
-@media (prefers-color-scheme:dark){:root{--fundo:#12151b;--cartao:#1b2029;--texto:#e6e9ef;--suave:#9aa3b2;--borda:#2c3340;--marca:#5aa2f0;--ok:#4ac26b;--alerta:#f0a050;--erro:#f97066}}
-*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--fundo);color:var(--texto)}
-header{display:flex;flex-wrap:wrap;gap:4px 18px;align-items:center;padding:12px 16px;background:var(--cartao);border-bottom:1px solid var(--borda)}
-header strong{margin-right:auto}header a{color:var(--suave);text-decoration:none}header a:hover{color:var(--marca)}
-main{max-width:1200px;margin:0 auto;padding:20px 16px}h1{font-size:1.35rem;margin:0 0 16px}h2{font-size:1.05rem;margin:24px 0 8px}
-.cartao{background:var(--cartao);border:1px solid var(--borda);border-radius:8px;padding:16px;margin-bottom:16px;overflow-x:auto}
-table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--borda);vertical-align:top}
-th{font-size:.8rem;text-transform:uppercase;letter-spacing:.03em;color:var(--suave)}
-a{color:var(--marca)}.suave{color:var(--suave)}.ok{color:var(--ok)}.alerta{color:var(--alerta)}.erro{color:var(--erro)}
-button,.botao{font:inherit;padding:6px 12px;border-radius:6px;border:1px solid var(--borda);background:var(--cartao);color:var(--texto);cursor:pointer;text-decoration:none;display:inline-block}
-button.perigo{color:var(--erro)}button.primario,.botao.primario{background:var(--marca);border-color:var(--marca);color:#fff}
-input,select,textarea{font:inherit;padding:8px;border:1px solid var(--borda);border-radius:6px;width:100%;background:var(--fundo);color:var(--texto)}
-code{font-size:.85em;word-break:break-all}.etiqueta{font-size:.8rem;padding:2px 8px;border-radius:99px;border:1px solid currentColor}
-dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}dt{color:var(--suave)}dd{margin:0}
-.topo{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}.topo h1{margin:0}
+:root{color-scheme:light;--fundo:#f3f5f7;--sup:#fff;--sup2:#f8fafb;--texto:#17202b;--suave:#5f6b7a;--borda:#e2e7ed;--marca:#0e7a5f;--marca-forte:#0a6650;--marca-fundo:#e5f3ee;
+--ok:#15803d;--ok-fundo:#e8f6ed;--alerta:#b45309;--alerta-fundo:#fdf3e5;--erro:#b91c1c;--erro-fundo:#fdeceb;--lateral:#0f1720;--lateral-texto:#a9b4c2;--sombra:0 1px 2px rgba(16,24,40,.05)}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--fundo:#0d1117;--sup:#151b23;--sup2:#1b232d;--texto:#e6edf3;--suave:#9aa6b2;--borda:#27313d;--marca:#34b38a;--marca-forte:#4cc79f;--marca-fundo:#12352b;
+--ok:#4ade80;--ok-fundo:#10291b;--alerta:#f5a524;--alerta-fundo:#33240d;--erro:#f87171;--erro-fundo:#3a1616;--lateral:#0a0e14;--lateral-texto:#94a0ae;--sombra:none}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--fundo);color:var(--texto);min-height:100vh}
+a{color:var(--marca)}h1,h2,h3{line-height:1.25;margin:0}h1{font-size:1.4rem}h2{font-size:1.05rem}h3{font-size:.95rem}
+.app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
+.lateral{position:sticky;top:0;height:100vh;background:var(--lateral);color:var(--lateral-texto);display:flex;flex-direction:column;padding:18px 12px;gap:4px}
+.marca{display:flex;align-items:center;gap:10px;color:#fff;font-weight:700;font-size:1rem;padding:4px 10px 18px;text-decoration:none}
+.marca i{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;background:var(--marca);font-style:normal}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav a{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;color:var(--lateral-texto);text-decoration:none;font-weight:500}
+.nav a:hover{background:rgba(255,255,255,.06);color:#fff}.nav a.atual{background:rgba(255,255,255,.1);color:#fff}
+.nav svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.sair{margin-top:auto;padding:12px 10px 0;border-top:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.85rem}
+.sair button{background:transparent;border-color:rgba(255,255,255,.18);color:var(--lateral-texto);min-height:30px;padding:4px 10px}
+.barra,.veu{display:none}.corpo{min-width:0}
+main{padding:28px 32px 48px;max-width:1240px;width:100%;margin:0 auto;min-width:0}
+.cabecalho{display:flex;justify-content:space-between;align-items:flex-start;gap:12px 16px;flex-wrap:wrap;margin-bottom:20px}
+.cabecalho .titulo{display:flex;flex-direction:column;gap:6px;min-width:0}.cabecalho .titulo h1{overflow-wrap:anywhere}
+.voltar{display:inline-flex;align-items:center;gap:4px;color:var(--suave);text-decoration:none;font-size:.88rem;margin-bottom:10px}.voltar:hover{color:var(--texto)}
+.cartao{background:var(--sup);border:1px solid var(--borda);border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:var(--sombra);min-width:0}
+.cartao>h2:first-child,.cartao>.topo:first-child{margin-bottom:14px}
+.topo{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.secao{margin:28px 0 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .linha{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.linha form{margin:0}
-.abas{display:flex;gap:2px;border-bottom:1px solid var(--borda);margin:0 0 16px;overflow-x:auto}
-.abas a{padding:8px 14px;text-decoration:none;color:var(--suave);border-bottom:2px solid transparent;white-space:nowrap}
-.abas a:hover{color:var(--texto)}.abas a.atual{color:var(--texto);border-bottom-color:var(--marca);font-weight:600}
-.selo{display:inline-flex;align-items:center;gap:4px;font-size:.8rem;line-height:1.4;padding:1px 8px;border-radius:99px;border:1px solid var(--borda);color:var(--suave);white-space:nowrap}
-.selo.ok{color:var(--ok);border-color:currentColor}.selo.alerta{color:var(--alerta);border-color:currentColor}.selo.erro{color:var(--erro);border-color:currentColor}
+.grade2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px;align-items:start}
+.suave{color:var(--suave)}.ok{color:var(--ok)}.alerta{color:var(--alerta)}.erro{color:var(--erro)}.pequeno{font-size:.85rem}
+button,.botao{font:inherit;font-weight:500;min-height:36px;padding:7px 14px;border-radius:8px;border:1px solid var(--borda);background:var(--sup);color:var(--texto);
+cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;line-height:1.2}
+button:hover,.botao:hover{border-color:var(--suave)}button:disabled{opacity:.5;cursor:not-allowed}
+.primario{background:var(--marca)!important;border-color:var(--marca)!important;color:#fff!important}.primario:hover{background:var(--marca-forte)!important}
+.perigo{color:var(--erro)!important}.perigo:hover{border-color:var(--erro)!important}
+.mini{min-height:30px;padding:4px 10px;font-size:.85rem}
+input,select,textarea{font:inherit;padding:9px 11px;border:1px solid var(--borda);border-radius:8px;width:100%;background:var(--sup);color:var(--texto);min-height:38px}
+input:focus,select:focus,textarea:focus,button:focus-visible,.botao:focus-visible{outline:2px solid var(--marca);outline-offset:1px}
+input[type=checkbox],input[type=radio]{width:18px;height:18px;min-height:0;accent-color:var(--marca);flex:none;margin:0}
+textarea{resize:vertical}label{display:block}
+.campos{display:grid;gap:14px;max-width:620px}.campos.largo{max-width:none}
+.campo>span{display:block;font-size:.85rem;font-weight:500;margin-bottom:5px}
+.marcar{display:flex;align-items:center;gap:8px;cursor:pointer}
+.acoes{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+code{font-size:.85em;word-break:break-all;background:var(--sup2);border:1px solid var(--borda);border-radius:5px;padding:1px 5px}
+.selo{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;line-height:1.3;padding:3px 9px;border-radius:99px;background:var(--sup2);color:var(--suave);border:1px solid var(--borda);white-space:nowrap}
+.selo::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.8}
+.selo.ok{color:var(--ok);background:var(--ok-fundo);border-color:transparent}.selo.alerta{color:var(--alerta);background:var(--alerta-fundo);border-color:transparent}
+.selo.erro{color:var(--erro);background:var(--erro-fundo);border-color:transparent}.selo.marca{color:var(--marca);background:var(--marca-fundo);border-color:transparent}
+.abas{display:flex;gap:4px;border-bottom:1px solid var(--borda);margin:0 0 20px;overflow-x:auto;scrollbar-width:none}
+.abas a{padding:9px 14px;text-decoration:none;color:var(--suave);border-bottom:2px solid transparent;white-space:nowrap;font-weight:500;margin-bottom:-1px}
+.abas a:hover{color:var(--texto)}.abas a.atual{color:var(--texto);border-bottom-color:var(--marca)}
 .numeros{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.numeros .cartao{margin:0}.numeros strong{display:block;font-size:1.6rem;line-height:1.2}.numeros span{color:var(--suave);font-size:.85rem}
-.codigo{font:600 1.5rem/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.12em}
-.cartao.destaque{border-color:var(--marca)}.cartao.aviso{border-color:var(--alerta)}
-.ajuda{color:var(--suave);font-size:.9rem;margin:4px 0 0}
-ol.passos{margin:0;padding-left:20px}ol.passos li{margin:4px 0}
-.formgrade{display:grid;gap:12px;max-width:560px}
-.vazio{text-align:center;padding:24px 16px;color:var(--suave)}
-@media (max-width:640px){th,td{padding:6px}.esconde-celular{display:none}}
+.numeros .cartao{margin:0;padding:14px 16px}.numeros strong{display:block;font-size:1.55rem;line-height:1.2}.numeros span{color:var(--suave);font-size:.85rem}
+.aviso{padding:12px 16px;border-radius:10px;margin-bottom:16px;font-weight:500}
+.aviso.ok{background:var(--ok-fundo);color:var(--ok)}.aviso.erro{background:var(--erro-fundo);color:var(--erro)}.aviso.alerta{background:var(--alerta-fundo);color:var(--alerta)}
+.vazio{text-align:center;padding:28px 16px;color:var(--suave)}
+.tabela{border-collapse:collapse;width:100%}
+.tabela th,.tabela td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--borda);vertical-align:middle}
+.tabela th{font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:var(--suave);font-weight:600}
+.tabela tbody tr:last-child td{border-bottom:0}.tabela tr.apagada td{opacity:.6}
+.tabela td.fim{text-align:right}.tabela td.fim .acoes{justify-content:flex-end}
+.nome{font-weight:600;color:var(--texto);text-decoration:none}a.nome:hover{color:var(--marca)}
+.sub{display:block;color:var(--suave);font-size:.84rem;font-weight:400}
+.envolve{overflow-x:auto;margin:-4px -18px;padding:0 18px}
+.chave{min-width:96px}.chave.ligada{background:var(--ok-fundo);color:var(--ok);border-color:transparent}
+.codigo{font:700 1.6rem/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.14em}
+.qr{display:grid;place-items:center;gap:12px;padding:8px 0}.qr img{background:#fff;padding:10px;border-radius:12px;width:min(280px,100%);height:auto}
+dl.dados{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:10px 18px;margin:0}dl.dados dt{color:var(--suave)}dl.dados dd{margin:0;overflow-wrap:anywhere}
+.fichas{display:flex;gap:6px;flex-wrap:wrap}
+.zona{border-color:var(--erro-fundo)}
+.entrar{min-height:100vh;display:grid;place-items:center;padding:16px}.entrar .cartao{width:min(380px,100%);padding:26px}
+.entrar h1{margin-bottom:18px}
+@media (max-width:900px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .barra{display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:20;background:var(--lateral);color:#fff;padding:10px 16px;font-weight:700}
+  .barra label{display:grid;place-items:center;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:1.2rem;border:1px solid rgba(255,255,255,.15)}
+  .lateral{position:fixed;z-index:40;left:0;top:0;width:260px;transform:translateX(-100%);transition:transform .2s ease}
+  #menu:checked~.app .lateral{transform:none}
+  .veu{display:none;position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.45)}#menu:checked~.app .veu{display:block}
+  main{padding:20px 16px 40px}
+}
+@media (max-width:720px){
+  .tabela thead{display:none}.tabela,.tabela tbody,.tabela tr,.tabela td{display:block;width:100%}
+  .tabela tr{border:1px solid var(--borda);border-radius:10px;padding:6px 12px;margin-bottom:10px;background:var(--sup)}
+  .tabela td{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px 12px;border:0;padding:7px 0;text-align:right}
+  .tabela td>*{max-width:100%}.tabela .fichas{justify-content:flex-end}
+  .tabela td::before{content:attr(data-r);color:var(--suave);font-size:.8rem;text-align:left;flex:none}
+  .tabela td[data-r=""]{display:block;text-align:left}.tabela td[data-r=""]::before{display:none}
+  .tabela td.fim .acoes{justify-content:flex-start}.tabela tbody tr:last-child td{border-bottom:0}
+  .tabela td.vazio{display:block;text-align:center}.tabela td.vazio::before{display:none}
+  .envolve{margin:0;padding:0;overflow:visible}.cartao{padding:14px}
+  .abas{gap:0}.abas a{padding:9px 9px;font-size:.92rem}
+  dl.dados{grid-template-columns:minmax(0,1fr)}dl.dados dt{margin-top:6px}
+  .cabecalho .acoes{width:100%}
+}
 `
 
-export function layout(titulo: string, corpo: string, usuario: string | null, extraHead = ''): string {
-  const nav = usuario
-    ? `<a href="/">Bots</a><a href="/numeros">Números</a><a href="/grupos">Grupos</a><a href="/equipe">Equipe</a><a href="/saude">Saúde</a><a href="/auditoria">Auditoria</a>
-       <form method="post" action="/sair" style="margin:0"><button>Sair (${esc(usuario)})</button></form>`
-    : ''
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(titulo)} · Ttalk Bot Manager</title><meta name="robots" content="noindex">${extraHead}<style>${CSS}</style></head>
-<body><header><strong>Ttalk Bot Manager</strong>${nav}</header><main>${corpo}</main></body></html>`
+export type Secao = 'bots' | 'numeros' | 'saude' | 'auditoria'
+
+const ICONES: Record<Secao, string> = {
+  bots: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9 11h.01M15 11h.01"/>',
+  numeros: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18h2"/>',
+  saude: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  auditoria: '<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>'
 }
 
-/** Selo colorido: ok (verde), alerta (laranja), erro (vermelho) ou neutro. */
-export function selo(texto: string, tom: 'ok' | 'alerta' | 'erro' | '' = ''): string {
+const NAV: { secao: Secao; href: string; rotulo: string }[] = [
+  { secao: 'bots', href: '/', rotulo: 'Bots' },
+  { secao: 'numeros', href: '/numeros', rotulo: 'Números' },
+  { secao: 'saude', href: '/saude', rotulo: 'Saúde' },
+  { secao: 'auditoria', href: '/auditoria', rotulo: 'Auditoria' }
+]
+
+export interface OpcoesLayout {
+  /** Item da barra lateral marcado como atual. */
+  secao?: Secao
+  /** Conteúdo extra no <head> (estilo próprio da página, refresh). */
+  head?: string
+}
+
+export function layout(titulo: string, corpo: string, usuario: string | null, o: OpcoesLayout = {}): string {
+  const head = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(titulo)} · Ttalk Bot Manager</title><meta name="robots" content="noindex"><style>${CSS}</style>${o.head ?? ''}</head>`
+  if (!usuario) return `${head}<body><div class="entrar">${corpo}</div></body></html>`
+  const nav = NAV.map(
+    (n) =>
+      `<a href="${n.href}"${n.secao === o.secao ? ' class="atual" aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONES[n.secao]}</svg>${n.rotulo}</a>`
+  ).join('')
+  return `${head}<body><input type="checkbox" id="menu" hidden>
+<div class="app"><aside class="lateral"><a class="marca" href="/"><i>T</i>Ttalk Bot Manager</a><nav class="nav" aria-label="Menu">${nav}</nav>
+<form class="sair" method="post" action="/sair"><span>${esc(usuario)}</span><button>Sair</button></form></aside>
+<label for="menu" class="veu" aria-hidden="true"></label>
+<div class="corpo"><div class="barra"><label for="menu" aria-label="Abrir menu">☰</label>Ttalk Bot Manager</div><main>${corpo}</main></div></div></body></html>`
+}
+
+export type Tom = 'ok' | 'alerta' | 'erro' | 'marca' | ''
+
+/** Selo colorido: ok (verde), alerta (laranja), erro (vermelho), marca ou neutro. */
+export function selo(texto: string, tom: Tom = ''): string {
   return `<span class="selo${tom ? ` ${tom}` : ''}">${esc(texto)}</span>`
 }
 
 /** Abas de uma página com sub-páginas. `atual` é o href da aba aberta. */
 export function abas(itens: { href: string; rotulo: string }[], atual: string): string {
-  return `<nav class="abas">${itens.map((i) => `<a href="${esc(i.href)}"${i.href === atual ? ' class="atual" aria-current="page"' : ''}>${esc(i.rotulo)}</a>`).join('')}</nav>`
+  // Em tela estreita as abas rolam de lado: a aba aberta é trazida para a vista.
+  return `<nav class="abas">${itens.map((i) => `<a href="${esc(i.href)}"${i.href === atual ? ' class="atual" aria-current="page"' : ''}>${esc(i.rotulo)}</a>`).join('')}</nav>
+    <script>(function(){var a=document.querySelector('.abas .atual');if(a&&a.parentNode.scrollWidth>a.parentNode.clientWidth)a.parentNode.scrollLeft=a.offsetLeft-16})()</script>`
 }
 
 /** Faixa de números-resumo no topo de uma página. */
@@ -69,26 +164,70 @@ export function resumo(itens: { valor: string | number; rotulo: string }[]): str
   return `<div class="numeros">${itens.map((i) => `<div class="cartao"><strong>${esc(i.valor)}</strong><span>${esc(i.rotulo)}</span></div>`).join('')}</div>`
 }
 
-/** Mensagem de sucesso (verde) ou erro (vermelho) no topo de uma página. */
+/** Aviso de sucesso (verde) ou erro (vermelho) no topo de uma página. */
 export function mensagem(ok: string | null, erro: string | null = null): string {
-  return `${ok ? `<div class="cartao ok" role="status">${esc(ok)}</div>` : ''}${erro ? `<div class="cartao erro" role="alert">${esc(erro)}</div>` : ''}`
+  return `${ok ? `<div class="aviso ok" role="status">${esc(ok)}</div>` : ''}${erro ? `<div class="aviso erro" role="alert">${esc(erro)}</div>` : ''}`
+}
+
+/** Título da página com, opcionalmente, um link de volta, selos ao lado e ações à direita. */
+export function cabecalho(titulo: string, o: { voltar?: { href: string; rotulo: string }; selos?: string; acoes?: string } = {}): string {
+  return `${o.voltar ? `<a class="voltar" href="${esc(o.voltar.href)}">← ${esc(o.voltar.rotulo)}</a>` : ''}
+    <div class="cabecalho"><div class="titulo"><h1>${esc(titulo)}</h1>${o.selos ? `<div class="fichas">${o.selos}</div>` : ''}</div>${o.acoes ? `<div class="acoes">${o.acoes}</div>` : ''}</div>`
+}
+
+export interface Coluna {
+  rotulo: string
+  /** Célula de ações: alinhada à direita. */
+  fim?: boolean
+}
+
+/**
+ * Tabela padrão. No celular cada linha vira um cartão e cada célula mostra o rótulo da coluna ao lado
+ * (a primeira coluna, sem rótulo, vira o título do cartão).
+ */
+export function tabela(colunas: Coluna[], linhas: { celulas: string[]; classe?: string; atributos?: string }[], vazio: string): string {
+  const corpo = linhas.length
+    ? linhas
+        .map(
+          (l) =>
+            `<tr${l.classe ? ` class="${l.classe}"` : ''}${l.atributos ? ` ${l.atributos}` : ''}>${l.celulas
+              .map((c, i) => `<td data-r="${i === 0 ? '' : esc(colunas[i]?.rotulo ?? '')}"${colunas[i]?.fim ? ' class="fim"' : ''}>${c}</td>`)
+              .join('')}</tr>`
+        )
+        .join('')
+    : `<tr><td colspan="${colunas.length}" class="vazio">${vazio}</td></tr>`
+  return `<div class="envolve"><table class="tabela"><thead><tr>${colunas.map((c) => `<th${c.fim ? ' class="fim"' : ''}>${esc(c.rotulo)}</th>`).join('')}</tr></thead><tbody>${corpo}</tbody></table></div>`
+}
+
+/** Botão que envia um POST (com confirmação, se `confirma`). Campos extras vão escondidos. */
+export function botaoPost(
+  acao: string,
+  rotulo: string,
+  o: { classe?: string; confirma?: string; campos?: Record<string, string | number>; desabilitado?: string } = {}
+): string {
+  const campos = Object.entries(o.campos ?? {})
+    .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`)
+    .join('')
+  const confirma = o.confirma ? ` data-confirma="${esc(o.confirma)}" onsubmit="return confirm(this.dataset.confirma)"` : ''
+  const desab = o.desabilitado ? ` disabled title="${esc(o.desabilitado)}"` : ''
+  return `<form method="post" action="${esc(acao)}"${confirma}>${campos}<button${o.classe ? ` class="${o.classe}"` : ''}${desab}>${esc(rotulo)}</button></form>`
 }
 
 export function paginaLogin(erro: string | null): string {
   return layout(
     'Entrar',
-    `<div class="cartao" style="max-width:360px;margin:40px auto">
-      <h1>Entrar no painel</h1>${erro ? `<p class="erro">${esc(erro)}</p>` : ''}
-      <form method="post" action="/login">
-        <p><label>Usuário<br><input name="usuario" autocomplete="username" required></label></p>
-        <p><label>Senha<br><input name="senha" type="password" autocomplete="current-password" required></label></p>
+    `<div class="cartao"><a class="marca" style="color:var(--texto);padding:0 0 18px"><i style="color:#fff">T</i>Ttalk Bot Manager</a>
+      ${erro ? `<div class="aviso erro" role="alert">${esc(erro)}</div>` : ''}
+      <form method="post" action="/login" class="campos">
+        <label class="campo"><span>Usuário</span><input name="usuario" autocomplete="username" required autofocus></label>
+        <label class="campo"><span>Senha</span><input name="senha" type="password" autocomplete="current-password" required></label>
         <button class="primario">Entrar</button>
       </form></div>`,
     null
   )
 }
 
-const ROTULO_SITUACAO = { aberto: '<span class="etiqueta ok">aberto</span>', fechado: '<span class="etiqueta suave">encerrado</span>', rascunho: '<span class="etiqueta alerta">rascunho</span>' }
+const SITUACAO_BOT = { aberto: selo('aberto', 'ok'), fechado: selo('encerrado'), rascunho: selo('rascunho', 'alerta') }
 
 function periodo(p: Processo): string {
   const f = (ms: number) => new Date(ms).toLocaleDateString('pt-BR', { timeZone: 'America/Fortaleza' })
@@ -99,34 +238,40 @@ export function linkWaMe(numero: string, codigo: string): string {
   return `https://wa.me/${numero}?text=${encodeURIComponent(`Quero me candidatar [${codigo}]`)}`
 }
 
+/** Campo só de leitura com botão de copiar. */
+export function copiar(valor: string, rotulo = 'Copiar'): string {
+  return `<div class="linha" style="flex-wrap:nowrap"><input readonly value="${esc(valor)}" aria-label="${esc(rotulo)}" onclick="this.select()" style="min-width:0">
+    <button type="button" class="mini" onclick="var i=this.previousElementSibling;i.select();navigator.clipboard&&navigator.clipboard.writeText(i.value);this.textContent='Copiado'">${esc(rotulo)}</button></div>`
+}
+
+export const ROTULO_STATUS: Record<string, string> = {
+  iniciando: 'iniciando',
+  aguardando_qr: 'aguardando QR',
+  conectado: 'conectado',
+  reconectando: 'reconectando',
+  desconectado: 'desconectado'
+}
+
+/** Situação de um número em uma palavra, com a cor. */
+export function seloNumero(n: { ativo: boolean; pausado: boolean } | null, e: EstadoConexao | null): string {
+  if (!n) return selo('sem número', 'erro')
+  if (!n.ativo) return selo('sem conexão', 'erro')
+  const st = e?.status ?? 'iniciando'
+  if (st === 'conectado') return n.pausado ? selo('pausado', 'alerta') : selo('conectado', 'ok')
+  return selo(ROTULO_STATUS[st] ?? st, st === 'desconectado' ? 'erro' : 'alerta')
+}
+
 /** Bot de grupos como a lista de bots mostra. */
 export interface ResumoBotGrupos {
   id: number
   nome: string
   ativo: boolean
   /** Número que o bot usa agora, com o status da conexão; null = sem número. */
-  numero: { nome: string; ativo: boolean; status: string | null; telefone: string | null } | null
+  numero: { nome: string; ativo: boolean; pausado: boolean; estado: EstadoConexao | null } | null
   gruposAtivos: number
-  lojas: number
   gestoresConfirmados: number
   gestoresPendentes: number
-  comandosLigados: number
-  personalizados: number
-}
-
-function linhaBotGrupos(b: ResumoBotGrupos): string {
-  const numero = !b.numero
-    ? selo('sem número', 'erro')
-    : !b.numero.ativo
-      ? `${esc(b.numero.nome)} ${selo('número desativado', 'erro')}`
-      : `${esc(b.numero.nome)} ${selo(ROTULO_STATUS[b.numero.status ?? 'iniciando'] ?? 'iniciando', b.numero.status === 'conectado' ? 'ok' : 'alerta')}${b.numero.telefone ? `<br><span class="suave">+${esc(b.numero.telefone)}</span>` : ''}`
-  const gestores = `${b.gestoresConfirmados} ✅${b.gestoresPendentes ? ` · ${b.gestoresPendentes} ⏳` : ''}`
-  return `<tr${b.ativo ? '' : ' class="suave"'}><td><a href="/grupos-bot/${b.id}"><strong>${esc(b.nome)}</strong></a>${b.ativo ? '' : `<br>${selo('desativado')}`}</td>
-    <td>${numero}</td>
-    <td><a href="/grupos?bot=${b.id}">${b.gruposAtivos} ativo(s)</a><br><span class="suave">${b.lojas} loja(s)</span></td>
-    <td><a href="/grupos-bot/${b.id}/gestores">${gestores}</a></td>
-    <td><a href="/grupos-bot/${b.id}/comandos">${b.comandosLigados} ligados</a>${b.personalizados ? `<br><span class="suave">${b.personalizados} personalizado(s)</span>` : ''}</td>
-    <td style="white-space:nowrap"><a class="botao" href="/grupos-bot/${b.id}">Abrir</a></td></tr>`
+  programadas: number
 }
 
 /** Número de recrutamento como a lista de bots precisa: nome, se está ativo e telefone conectado. */
@@ -139,93 +284,94 @@ export interface NumeroDosBots {
 
 export function paginaProcessos(
   config: ConfigCarregada,
-  resumo: Map<string, { total: number; concluidas: number }>,
+  resumoProcessos: Map<string, { total: number; concluidas: number }>,
   numeros: NumeroDosBots[],
   usuario: string,
   agora: number,
   aviso: string | null = null,
   botsGrupos: ResumoBotGrupos[] = []
 ): string {
-  const linhas = config.processos
-    .map((p) => {
-      const r = resumo.get(p.codigo) ?? { total: 0, concluidas: 0 }
+  const grupos = tabela(
+    [{ rotulo: 'Bot' }, { rotulo: 'Número' }, { rotulo: 'Grupos ativos' }, { rotulo: 'Gestores' }, { rotulo: 'Programadas' }],
+    botsGrupos.map((b) => ({
+      classe: b.ativo ? '' : 'apagada',
+      celulas: [
+        `<a class="nome" href="/grupos-bot/${b.id}">${esc(b.nome)}</a>${b.ativo ? '' : '<span class="sub">desativado</span>'}`,
+        b.numero ? `<span class="linha">${esc(b.numero.nome)} ${seloNumero(b.numero, b.numero.estado)}</span>` : selo('sem número', 'erro'),
+        `<a href="/grupos-bot/${b.id}/grupos">${b.gruposAtivos}</a>`,
+        `<a href="/grupos-bot/${b.id}/gestores">${b.gestoresConfirmados}</a>${b.gestoresPendentes ? ` ${selo(`${b.gestoresPendentes} pendente(s)`, 'alerta')}` : ''}`,
+        `<a href="/grupos-bot/${b.id}/programadas">${b.programadas}</a>`
+      ]
+    })),
+    'Nenhum bot de grupos.'
+  )
+  const recrutamento = tabela(
+    [{ rotulo: 'Vaga' }, { rotulo: 'Situação' }, { rotulo: 'Período' }, { rotulo: 'Candidaturas' }, { rotulo: 'Link' }, { rotulo: '', fim: true }],
+    config.processos.map((p) => {
+      const r = resumoProcessos.get(p.codigo) ?? { total: 0, concluidas: 0 }
       const n = numeros.find((x) => x.id === p.numeroId)
-      const link = n?.telefone ? linkWaMe(n.telefone, p.codigo) : null
       const cod = encodeURIComponent(p.codigo)
-      const qual = numeros.length > 1 && n?.ativo ? `<br><span class="suave">${esc(n.nome)}</span>` : ''
-      const destino =
-        n && !n.ativo
-          ? `<span class="erro">número «${esc(n.nome)}» desativado</span>`
-          : link
-            ? `<code>${esc(link)}</code>`
-            : '<span class="suave">conecte o número para gerar</span>'
-      return `<tr><td><strong>${esc(p.vaga)}</strong><br><span class="suave">${esc(p.codigo)}</span></td>
-        <td>${ROTULO_SITUACAO[situacao(p, agora)]}</td><td>${periodo(p)}</td>
-        <td><a href="/processos/${cod}">${r.concluidas} concluídas</a><br><span class="suave">${r.total - r.concluidas} incompletas</span></td>
-        <td>${destino}${qual}</td>
-        <td style="white-space:nowrap"><a class="botao" href="/bots/${cod}">Editar</a> <a class="botao" href="/bots/novo?de=${cod}">Copiar</a></td></tr>`
-    })
-    .join('')
-  const semBot = [...resumo.keys()].filter((c) => !config.processos.some((p) => p.codigo === c))
+      const link = n && !n.ativo ? selo(`${n.nome} sem conexão`, 'erro') : n?.telefone ? copiar(linkWaMe(n.telefone, p.codigo), 'Copiar link') : selo('número sem conexão', 'alerta')
+      return {
+        celulas: [
+          `<a class="nome" href="/bots/${cod}">${esc(p.vaga)}</a><span class="sub">${esc(p.codigo)}</span>`,
+          SITUACAO_BOT[situacao(p, agora)],
+          esc(periodo(p)),
+          `<a href="/processos/${cod}">${r.concluidas} concluída(s)</a>${r.total - r.concluidas ? `<span class="sub">${r.total - r.concluidas} incompleta(s)</span>` : ''}`,
+          link,
+          `<div class="acoes"><a class="botao mini" href="/bots/${cod}">Editar</a><a class="botao mini" href="/bots/novo?de=${cod}">Copiar</a></div>`
+        ]
+      }
+    }),
+    'Nenhum bot de recrutamento.'
+  )
+  const semBot = [...resumoProcessos.keys()].filter((c) => !config.processos.some((p) => p.codigo === c))
   const erros = config.erros.length
-    ? `<div class="cartao"><h2 class="erro">Bots com erro (fora do ar até serem corrigidos)</h2><ul>${config.erros.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`
+    ? `<div class="aviso erro" role="alert">Bots com erro, fora do ar: ${config.erros.map((e) => esc(e)).join(' · ')}</div>`
     : ''
   const orfaos = semBot.length
-    ? `<div class="cartao"><h2 class="alerta">Candidaturas de bots excluídos</h2><p>A retenção automática não se aplica a elas: ${semBot.map((c) => `<a href="/processos/${encodeURIComponent(c)}">${esc(c)}</a>`).join(', ')}</p></div>`
+    ? `<div class="cartao"><h2>Candidaturas de bots excluídos</h2><div class="fichas">${semBot.map((c) => `<a class="botao mini" href="/processos/${encodeURIComponent(c)}">${esc(c)}</a>`).join('')}</div></div>`
     : ''
-  const direto = numeros
-    .filter((n): n is NumeroDosBots & { telefone: string } => !!n.telefone)
-    .map((n) => {
-      const abertos = config.processos.filter((p) => p.numeroId === n.id && situacao(p, agora) === 'aberto').length
-      const destino =
-        abertos === 1 ? 'vai para o único bot aberto.' : abertos > 1 ? 'o candidato escolhe a vaga numa enquete.' : 'responde que não há inscrições abertas.'
-      return `<p class="suave">Contato direto pelo ${esc(n.nome)} (<code>https://wa.me/${esc(n.telefone)}</code>): ${destino}</p>`
-    })
-    .join('')
-  const grupos = botsGrupos.map(linhaBotGrupos).join('')
   return layout(
     'Bots',
-    `${aviso ? `<div class="cartao ok">${esc(aviso)}</div>` : ''}
-    <div class="topo"><h1>Bots de recrutamento</h1><a class="botao primario" href="/bots/novo">+ Novo bot</a></div>
-    ${erros}
-    <div class="cartao"><table><thead><tr><th>Vaga</th><th>Situação</th><th>Período</th><th>Candidaturas</th><th>Link de divulgação</th><th></th></tr></thead>
-    <tbody>${linhas || '<tr><td colspan="6" class="suave">Nenhum bot ainda. Clique em "+ Novo bot".</td></tr>'}</tbody></table></div>${direto}${orfaos}
-    <div class="topo" style="margin-top:32px"><h1>Bots de grupos</h1><a class="botao primario" href="/grupos-bot/novo">+ Bot de grupos</a></div>
-    <div class="cartao"><p class="ajuda" style="margin:0 0 8px">Atendem comandos nos grupos ativos da empresa. Cada um tem as suas lojas, gestores e comandos.</p>
-    <table><thead><tr><th>Bot</th><th>Número</th><th>Grupos</th><th>Gestores</th><th>Comandos</th><th></th></tr></thead>
-    <tbody>${grupos || '<tr><td colspan="6" class="vazio">Nenhum bot de grupos ainda. Clique em "+ Bot de grupos".</td></tr>'}</tbody></table></div>`,
-    usuario
+    `${cabecalho('Bots')}${mensagem(aviso)}${erros}
+    <div class="secao"><h2>Grupos</h2><a class="botao primario" href="/grupos-bot/novo">+ Bot de grupos</a></div>
+    <div class="cartao">${grupos}</div>
+    <div class="secao"><h2>Recrutamento</h2><a class="botao primario" href="/bots/novo">+ Bot de recrutamento</a></div>
+    <div class="cartao">${recrutamento}</div>${orfaos}`,
+    usuario,
+    { secao: 'bots' }
   )
 }
 
 export function paginaProcesso(codigo: string, p: Processo | undefined, candidatos: CandidatoPainel[], usuario: string): string {
   const colunas = colunasDeResposta(p, candidatos)
-  const linhas = candidatos
-    .map(
-      (c) => `<tr><td>${esc(c.protocolo)}</td>
-      <td>${c.status === 'concluida' ? '<span class="ok">concluída</span>' : `<span class="alerta">incompleta</span><br><span class="suave">parou em: ${esc(c.passo)}</span>`}</td>
-      ${colunas.map((k) => `<td>${esc(c.respostas[k] ?? '')}</td>`).join('')}
-      <td>${esc(c.telefone ?? '')}</td><td>${esc(dataBR(c.concluidaEm ?? c.criadaEm))}</td>
-      <td>${c.arquivos.map((a, i) => `<a href="/arquivos/${a.id}">arquivo ${i + 1} (${esc(a.ext)})</a>`).join('<br>') || '<span class="suave">—</span>'}</td>
-      <td><form method="post" action="/candidaturas/${c.id}/excluir" onsubmit="return confirm('Excluir ${esc(c.protocolo)} e seus arquivos? Não tem volta.')"><button class="perigo">Excluir</button></form></td></tr>`
-    )
-    .join('')
+  const t = tabela(
+    [{ rotulo: 'Protocolo' }, { rotulo: 'Situação' }, ...colunas.map((k) => ({ rotulo: k })), { rotulo: 'Telefone' }, { rotulo: 'Data' }, { rotulo: 'Currículo' }, { rotulo: '', fim: true }],
+    candidatos.map((c) => ({
+      celulas: [
+        `<span class="nome">${esc(c.protocolo)}</span>`,
+        c.status === 'concluida' ? selo('concluída', 'ok') : `${selo('incompleta', 'alerta')}<span class="sub">parou em: ${esc(c.passo)}</span>`,
+        ...colunas.map((k) => esc(c.respostas[k] ?? '')),
+        esc(c.telefone ?? ''),
+        esc(dataBR(c.concluidaEm ?? c.criadaEm)),
+        c.arquivos.map((a, i) => `<a href="/arquivos/${a.id}">arquivo ${i + 1} (${esc(a.ext)})</a>`).join('<br>') || '—',
+        botaoPost(`/candidaturas/${c.id}/excluir`, 'Excluir', { classe: 'perigo mini', confirma: `Excluir ${c.protocolo} e seus arquivos? Não tem volta.` })
+      ]
+    })),
+    'Nenhuma candidatura.'
+  )
   return layout(
     codigo,
-    `<h1>${esc(codigo)}${p ? ` · ${esc(p.vaga)}` : ''}</h1>
-    <p><a class="botao primario" href="/processos/${encodeURIComponent(codigo)}/exportar">Exportar ZIP (currículos + CSV)</a></p>
-    <div class="cartao"><table><thead><tr><th>Protocolo</th><th>Status</th>${colunas.map((k) => `<th>${esc(k)}</th>`).join('')}<th>Telefone</th><th>Data</th><th>Currículo</th><th></th></tr></thead>
-    <tbody>${linhas || `<tr><td colspan="${colunas.length + 6}" class="suave">Nenhuma candidatura ainda.</td></tr>`}</tbody></table></div>`,
-    usuario
+    `${cabecalho(p ? p.vaga : codigo, {
+      voltar: { href: '/', rotulo: 'Bots' },
+      selos: selo(codigo, 'marca'),
+      acoes: `<a class="botao primario" href="/processos/${encodeURIComponent(codigo)}/exportar">Exportar ZIP</a>`
+    })}
+    <div class="cartao">${t}</div>`,
+    usuario,
+    { secao: 'bots' }
   )
-}
-
-export const ROTULO_STATUS: Record<string, string> = {
-  iniciando: 'iniciando',
-  aguardando_qr: 'aguardando leitura do QR',
-  conectado: 'conectado',
-  reconectando: 'reconectando',
-  desconectado: 'desconectado'
 }
 
 export interface SaudeNumero {
@@ -245,31 +391,39 @@ export interface DadosSaude {
 
 export function paginaSaude(d: DadosSaude, usuario: string): string {
   const fila = d.filas.entrada + d.filas.saida
-  const numeros = d.numeros
-    .map(({ numero: n, estado: e, ultimaMensagem }) => {
-      const cor = !n.ativo ? 'suave' : e?.status === 'conectado' ? 'ok' : 'erro'
-      const status = !n.ativo ? 'desativado' : `${esc(ROTULO_STATUS[e?.status ?? 'iniciando'])}${e ? ` desde ${esc(dataBR(e.desde))}` : ''}`
-      return `<dt>${esc(n.nome)} <span class="suave">(${ROTULO_PAPEL[n.papel]})</span></dt>
-        <dd><span class="${cor}">${status}</span> · última mensagem: ${esc(ultimaMensagem ? dataBR(ultimaMensagem) : 'nenhuma')}</dd>`
-    })
-    .join('')
-  const corpo = `<h1>Saúde do bot</h1><div class="cartao"><h2 style="margin-top:0">Números</h2><dl>${numeros}</dl></div>
-  <div class="cartao"><dl>
-    <dt>Fila</dt><dd class="${fila === 0 ? 'ok' : 'alerta'}">${d.filas.entrada} a processar · ${d.filas.saida} a enviar</dd>
-    <dt>Mensagens com erro</dt><dd class="${d.filas.erros ? 'erro' : 'ok'}">${d.filas.erros}</dd>
-    <dt>Último backup</dt><dd class="${d.backupAtivo ? '' : 'erro'}">${d.backupAtivo ? esc(d.ultimoBackup ? dataBR(Date.parse(d.ultimoBackup)) : 'ainda não rodou') : 'desativado (defina BACKUP_SENHA)'}</dd>
-    <dt>Alerta por e-mail</dt><dd class="${d.alertaAtivo ? 'ok' : 'alerta'}">${d.alertaAtivo ? 'ativo' : 'desativado (defina SMTP_URL e ALERTA_EMAIL_PARA)'}</dd>
-    <dt>Configuração</dt><dd>${d.config.processos.length} processos, lida em ${esc(dataBR(d.config.carregadaEm))}${d.config.erros.length ? ` · <span class="erro">${d.config.erros.length} com erro</span>` : ''}</dd>
+  const numeros = tabela(
+    [{ rotulo: 'Número' }, { rotulo: 'Situação' }, { rotulo: 'Desde' }, { rotulo: 'Última mensagem' }],
+    d.numeros.map(({ numero: n, estado: e, ultimaMensagem }) => ({
+      celulas: [
+        `<a class="nome" href="/numeros/${n.id}">${esc(n.nome)}</a><span class="sub">${n.papel === 'grupos' ? 'Grupos' : 'Recrutamento'}</span>`,
+        seloNumero(n, e),
+        e ? esc(dataBR(e.desde)) : '—',
+        esc(ultimaMensagem ? dataBR(ultimaMensagem) : '—')
+      ]
+    })),
+    'Nenhum número.'
+  )
+  const corpo = `${cabecalho('Saúde')}
+  ${resumo([
+    { valor: d.filas.entrada, rotulo: 'a processar' },
+    { valor: d.filas.saida, rotulo: 'a enviar' },
+    { valor: d.filas.erros, rotulo: 'com erro' }
+  ])}
+  <div class="cartao"><h2>Números</h2>${numeros}</div>
+  <div class="cartao"><h2>Sistema</h2><dl class="dados">
+    <dt>Fila</dt><dd>${fila === 0 ? selo('vazia', 'ok') : selo(`${fila} item(ns)`, 'alerta')}</dd>
+    <dt>Último backup</dt><dd>${d.backupAtivo ? esc(d.ultimoBackup ? dataBR(Date.parse(d.ultimoBackup)) : 'ainda não rodou') : selo('desativado', 'erro')}</dd>
+    <dt>Alerta por e-mail</dt><dd>${d.alertaAtivo ? selo('ativo', 'ok') : selo('desativado', 'alerta')}</dd>
+    <dt>Bots de recrutamento</dt><dd>${d.config.processos.length}${d.config.erros.length ? ` ${selo(`${d.config.erros.length} com erro`, 'erro')}` : ''}</dd>
   </dl></div>`
-  return layout('Saúde', corpo, usuario)
+  return layout('Saúde', corpo, usuario, { secao: 'saude' })
 }
 
 export function paginaAuditoria(linhas: { em: number; usuario: string; acao: string; detalhe: string | null }[], usuario: string): string {
-  return layout(
-    'Auditoria',
-    `<h1>Auditoria</h1><div class="cartao"><table><thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Detalhe</th></tr></thead><tbody>
-    ${linhas.map((l) => `<tr><td>${esc(dataBR(l.em))}</td><td>${esc(l.usuario)}</td><td>${esc(l.acao)}</td><td>${esc(l.detalhe ?? '')}</td></tr>`).join('') || '<tr><td colspan="4" class="suave">Nada registrado.</td></tr>'}
-    </tbody></table></div>`,
-    usuario
+  const t = tabela(
+    [{ rotulo: 'Quando' }, { rotulo: 'Quem' }, { rotulo: 'Ação' }, { rotulo: 'Detalhe' }],
+    linhas.map((l) => ({ celulas: [esc(dataBR(l.em)), esc(l.usuario), `<code>${esc(l.acao)}</code>`, esc(l.detalhe ?? '')] })),
+    'Nada registrado.'
   )
+  return layout('Auditoria', `${cabecalho('Auditoria')}<div class="cartao">${t}</div>`, usuario, { secao: 'auditoria' })
 }

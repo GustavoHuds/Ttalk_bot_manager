@@ -1,6 +1,6 @@
 import { TEXTOS_EDITAVEIS, type DadosBot } from '../config/bots.js'
 import type { Mensagens } from '../config/tipos.js'
-import { esc, layout } from './paginas.js'
+import { cabecalho, esc, layout, selo } from './paginas.js'
 
 export interface OpcoesEditor {
   dados: DadosBot
@@ -43,7 +43,7 @@ export function paginaEditorBot(o: OpcoesEditor): string {
     const atual = d.mensagens[chave]
     const valor = atual === undefined ? '' : Array.isArray(atual) ? atual.join('\n') : atual
     const dica = Array.isArray(padrao) ? padrao.join('\n') : (padrao ?? '')
-    return `<p><label>${esc(rotulo)}<br><textarea data-msg="${esc(chave)}" rows="${lista ? 3 : 2}" placeholder="${esc(dica)}">${esc(valor)}</textarea></label></p>`
+    return `<label class="campo"><span>${esc(rotulo)}</span><textarea data-msg="${esc(chave)}" rows="${lista ? 3 : 2}" placeholder="${esc(dica)}">${esc(valor)}</textarea></label>`
   }).join('')
 
   const botoes =
@@ -55,13 +55,11 @@ export function paginaEditorBot(o: OpcoesEditor): string {
          <button name="acao" value="aberto" class="primario">Abrir inscrições</button>
          ${d.status === 'encerrado' ? '<button name="acao" value="encerrado">Salvar (continua encerrado)</button>' : ''}`
 
-  const aviso =
-    editando && o.candidaturas > 0
-      ? `<p class="alerta">Este bot já tem ${o.candidaturas} candidatura(s). Mudanças valem para as próximas mensagens; quem está no meio continua do passo em que parou. Remover uma pergunta não apaga respostas já dadas.</p>`
-      : ''
-
-  const corpo = `<h1>${editando ? `Editar bot · ${esc(d.vaga)}` : 'Novo bot'}</h1>
-  ${o.erro ? `<div class="cartao erro"><strong>Não foi possível salvar:</strong> ${esc(o.erro)}</div>` : ''}${aviso}
+  const selos = editando
+    ? `${selo(d.codigo, 'marca')}${o.candidaturas > 0 ? selo(`${o.candidaturas} candidatura(s)`) : ''}`
+    : ''
+  const corpo = `${cabecalho(editando ? d.vaga : 'Novo bot de recrutamento', { voltar: { href: '/', rotulo: 'Bots' }, selos })}
+  ${o.erro ? `<div class="aviso erro" role="alert">${esc(o.erro)}</div>` : ''}
   <form id="f" method="post" action="/bots/salvar">
     <input type="hidden" name="dados" id="dados"><input type="hidden" name="original" value="${esc(o.original ?? '')}">
     <div class="cartao">
@@ -75,13 +73,10 @@ export function paginaEditorBot(o: OpcoesEditor): string {
         <label>Encerra em<input id="encerra_em" type="date" value="${esc(d.encerra_em)}" required></label>
         <label>Guardar dados por (meses)<input id="retencao_meses" type="number" min="1" max="60" value="${esc(d.retencao_meses)}" required></label>
       </div>
-      ${editando ? '' : '<p class="suave">O código não muda depois de criado: ele identifica a vaga no link e nas candidaturas.</p>'}
     </div>
 
     <div class="cartao">
-      <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">Perguntas</h2>
-      <button type="button" id="adicionar">+ Adicionar pergunta</button></div>
-      <p class="suave">Uma pergunta por mensagem, nesta ordem. "Enquete" mostra as opções para tocar (o candidato também pode responder com o número).</p>
+      <div class="topo"><h2>Perguntas</h2><button type="button" id="adicionar">+ Pergunta</button></div>
       <ol id="perguntas" class="perguntas"></ol>
       <div class="pergunta fixa">
         <strong>Currículo (sempre por último)</strong>
@@ -92,35 +87,35 @@ export function paginaEditorBot(o: OpcoesEditor): string {
       </div>
     </div>
 
-    <details class="cartao"><summary><strong>Textos do bot</strong> <span class="suave">(em branco = texto padrão, mostrado em cinza)</span></summary>
-      <p class="suave">Variáveis: {empresa} {vaga} {primeiro_nome} {protocolo} {retencao_meses}</p>${textos}
+    <details class="cartao"><summary><strong>Textos do bot</strong></summary>
+      <div class="campos largo" style="margin-top:14px"><div class="fichas">${['{empresa}', '{vaga}', '{primeiro_nome}', '{protocolo}', '{retencao_meses}'].map((v) => `<code>${v}</code>`).join('')}</div>${textos}</div>
     </details>
 
-    <div class="cartao acoes">${botoes} <a class="botao" href="/">Cancelar</a></div>
+    <div class="cartao acoes barra-acoes">${botoes} <a class="botao" href="/">Cancelar</a></div>
   </form>
   ${
     editando
-      ? `<form method="post" action="/bots/${encodeURIComponent(o.original!)}/excluir" onsubmit="return confirm('Excluir este bot? Só é possível se não houver candidaturas.')">
-          <button class="perigo" ${o.candidaturas > 0 ? 'disabled title="Há candidaturas: encerre em vez de excluir"' : ''}>Excluir bot</button></form>`
+      ? `<div class="cartao zona"><h2>Excluir</h2><form method="post" action="/bots/${encodeURIComponent(o.original!)}/excluir" onsubmit="return confirm('Excluir este bot?')">
+          <button class="perigo" ${o.candidaturas > 0 ? 'disabled title="Há candidaturas: encerre em vez de excluir"' : ''}>Excluir bot</button></form></div>`
       : ''
   }
   <script type="application/json" id="inicial">${jsonSeguro(perguntas)}</script>
   <script>${SCRIPT}</script>`
 
-  return layout(editando ? 'Editar bot' : 'Novo bot', corpo, o.usuario, `<style>${CSS_EDITOR}</style>`)
+  return layout(editando ? 'Editar bot' : 'Novo bot', corpo, o.usuario, { secao: 'bots', head: `<style>${CSS_EDITOR}</style>` })
 }
 
 const CSS_EDITOR = `
-.grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
-label{display:block}.grade label,.pergunta label{font-size:.9rem;color:var(--suave)}
-.perguntas{padding-left:0;list-style:none;margin:12px 0}
-.pergunta{border:1px solid var(--borda);border-radius:8px;padding:12px;margin-bottom:10px;display:grid;gap:8px}
-.pergunta.fixa{background:var(--fundo)}
-.linha{display:flex;gap:8px;flex-wrap:wrap;align-items:end}.linha>label{flex:1 1 200px}
-.check{display:inline-flex;gap:4px;align-items:center;margin-right:12px;color:var(--texto)}.check input{width:auto}
-.acoes{display:flex;gap:8px;flex-wrap:wrap;position:sticky;bottom:0}
-textarea{resize:vertical}summary{cursor:pointer}
-[hidden]{display:none!important}
+#f .grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:12px}
+#f .grade label,#f .pergunta label{font-size:.85rem;font-weight:500}
+#f .grade input,#f .grade select,#f .pergunta input,#f .pergunta select,#f .pergunta textarea{margin-top:5px;font-weight:400}
+#f .perguntas{padding-left:0;list-style:none;margin:14px 0}
+#f .pergunta{border:1px solid var(--borda);border-radius:10px;padding:14px;margin-bottom:10px;display:grid;gap:10px}
+#f .pergunta.fixa{background:var(--sup2)}
+#f .linha{align-items:flex-end}#f .linha>label{flex:1 1 200px}
+#f .check{display:inline-flex;gap:6px;align-items:center;margin:6px 14px 0 0;font-weight:400}
+#f .barra-acoes{position:sticky;bottom:0;z-index:5}
+summary{cursor:pointer}[hidden]{display:none!important}
 `
 
 /** Editor das perguntas: monta as linhas a partir do JSON e serializa tudo no envio. */

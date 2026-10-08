@@ -17,23 +17,25 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import type { Logger } from 'pino'
 import type { MensagemRecebida } from '../conversa/orquestrador.js'
+import type { Midia } from '../db/bots-grupos.js'
 import type { Papel } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
-import type { ConexaoGrupos, EventoGrupos, InfoGrupo, MensagemGrupo, MetadadosGrupo } from '../grupos/tipos.js'
+import type { ChaveMensagem, ConexaoGrupos, EventoGrupos, InfoGrupo, MensagemGrupo, MetadadosGrupo } from '../grupos/tipos.js'
 import type { ConexaoEnvio } from './expedidor.js'
 import {
-  comandoDaMensagem,
   entradaDaMensagem,
+  extensaoDe,
   identidade,
   infoDoGrupo,
   jidIgnorado,
   jidIgnoradoGrupos,
-  membrosDoEvento,
   membrosDoGrupo,
+  mensagemDoBotGrupos,
   opcoesVotadas,
   paraNumero,
   souEu,
-  telefoneDoJid
+  telefoneDoJid,
+  tipoDeMidia
 } from './normalizar.js'
 
 export type StatusConexao = 'iniciando' | 'aguardando_qr' | 'conectado' | 'reconectando' | 'desconectado'
@@ -59,7 +61,8 @@ export interface OpcoesBaileys {
   /** Mensagens mais velhas que isso (ao reconectar) são ignoradas. */
   janelaMs: number
   aoReceber: (m: MensagemRecebida) => void
-  aoComando?: (m: MensagemGrupo) => void
+  /** Bot de grupos: toda mensagem com texto (ou legenda); o orquestrador descarta na hora o que não interessa. */
+  aoMensagemGrupos?: (m: MensagemGrupo) => void
   aoEventoGrupos?: (e: EventoGrupos) => void
   aoMudarEstado?: (e: EstadoConexao) => void
 }
@@ -114,8 +117,11 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
       ...(version ? { version } : {}),
       logger: logBaileys as never,
       browser: Browsers.ubuntu('Chrome'),
+      // Anti-bloqueio: não aparece "online" o tempo todo, não puxa histórico, não gera prévia de link
+      // (cada prévia é um acesso extra ao site, coisa que cliente comum não faz em toda mensagem).
       markOnlineOnConnect: false,
       syncFullHistory: false,
+      generateHighQualityLinkPreview: false,
       shouldIgnoreJid: (jid) => (this.o.papel === 'grupos' ? jidIgnoradoGrupos(jid) : jidIgnorado(jid)),
       getMessage: async (key) => {
         const conteudo = key.id ? this.o.repo.enviada(this.o.numeroId, key.id) : null
@@ -141,7 +147,7 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
       const aceita = this.o.papel === 'grupos' ? type === 'notify' || type === 'append' : type === 'notify'
       if (!aceita) return
       for (const msg of messages) {
-        const tratar = this.o.papel === 'grupos' ? this.tratarComando(msg) : this.tratarRecebida(msg)
+        const tratar = this.o.papel === 'grupos' ? this.tratarGrupos(msg) : this.tratarRecebida(msg)
         tratar.catch((err) => this.o.log.error({ err }, 'erro ao ler mensagem recebida'))
       }
     })
@@ -245,14 +251,14 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
     return null
   }
 
-  /** Bot de grupos: só comandos passam. A conversa comum do grupo é descartada aqui, sem tocar no banco nem no log. */
-  private async tratarComando(msg: WAMessage): Promise<void> {
-    const comando = comandoDaMensagem(msg, this.o.numeroId)
-    if (!comando) return
+  /** Bot de grupos: só texto (ou legenda) passa; o orquestrador decide, sem gravar nem logar o conteúdo. */
+  private async tratarGrupos(msg: WAMessage): Promise<void> {
+    const m = mensagemDoBotGrupos(msg, this.o.numeroId)
+    if (!m) return
     try {
-      this.o.aoComando?.(comando)
+      this.o.aoMensagemGrupos?.(m)
     } catch (err) {
-      this.o.log.error({ err, id: comando.id }, 'erro ao tratar comando de grupo')
+      this.o.log.error({ err, id: m.id }, 'erro ao tratar mensagem do bot de grupos')
     }
   }
 
@@ -283,12 +289,6 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
     })
     sock.ev.on('group-participants.update', (u) => {
       this.esquecerGrupo(u.id)
-      // Mudanças nos outros: o orquestrador só guarda se o grupo estiver ativo no bot.
-      const acao = u.action
-      if (acao === 'add' || acao === 'remove' || acao === 'promote' || acao === 'demote') {
-        const membros = membrosDoEvento(u.participants, acao, this.eu())
-        if (membros.length) emitir({ tipo: 'participantes', jid: u.id, acao, membros })
-      }
       if (!u.participants.some((p) => souEu(this.eu(), p))) return
       if (u.action === 'remove') emitir({ tipo: 'saiu', jid: u.id })
       else if (u.action === 'promote' || u.action === 'demote') emitir({ tipo: 'admin', jid: u.id, admin: u.action === 'promote' })
@@ -347,13 +347,58 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
     return this.sock
   }
 
-  async digitando(jid: string): Promise<void> {
-    await this.exigirSocket().sendPresenceUpdate('composing', jid)
+  async presenca(jid: string, estado: 'composing' | 'recording' | 'paused'): Promise<void> {
+    await this.exigirSocket().sendPresenceUpdate(estado, jid)
   }
 
   async enviarTexto(jid: string, texto: string, mencoes?: string[]): Promise<void> {
     const enviada = await this.exigirSocket().sendMessage(jid, mencoes?.length ? { text: texto, mentions: mencoes } : { text: texto })
     this.guardarEnviada(enviada)
+  }
+
+  async enviarMidia(jid: string, midia: Midia, dados: Buffer, legenda: string | null, mencoes?: string[]): Promise<void> {
+    const extra = { ...(legenda ? { caption: legenda } : {}), ...(mencoes?.length ? { mentions: mencoes } : {}) }
+    const conteudo =
+      midia.tipo === 'imagem'
+        ? { image: dados, mimetype: midia.mimetype, ...extra }
+        : midia.tipo === 'video'
+          ? { video: dados, mimetype: midia.mimetype, ...extra }
+          : midia.tipo === 'audio'
+            ? { audio: dados, mimetype: midia.mimetype, ...(mencoes?.length ? { mentions: mencoes } : {}) }
+            : { document: dados, mimetype: midia.mimetype, fileName: midia.nome ?? 'arquivo', ...extra }
+    const enviada = await this.exigirSocket().sendMessage(jid, conteudo)
+    this.guardarEnviada(enviada)
+  }
+
+  async removerParticipantes(jid: string, participantes: string[]): Promise<void> {
+    await this.exigirSocket().groupParticipantsUpdate(jid, participantes, 'remove')
+  }
+
+  async fecharGrupo(jid: string, fechado: boolean): Promise<void> {
+    await this.exigirSocket().groupSettingUpdate(jid, fechado ? 'announcement' : 'not_announcement')
+  }
+
+  async apagar(c: ChaveMensagem): Promise<void> {
+    await this.exigirSocket().sendMessage(c.chat, {
+      delete: { remoteJid: c.chat, id: c.id, fromMe: false, ...(c.participante ? { participant: c.participante } : {}) }
+    })
+  }
+
+  /** Como uma pessoa: lê o comando antes de responder. */
+  async marcarLida(c: ChaveMensagem): Promise<void> {
+    await this.exigirSocket().readMessages([{ remoteJid: c.chat, id: c.id, ...(c.participante ? { participant: c.participante } : {}) }])
+  }
+
+  async baixarMidiaGrupo(bruto: string): Promise<{ dados: Buffer; midia: Omit<Midia, 'caminho'>; ext: string }> {
+    const msg = JSON.parse(bruto, BufferJSON.reviver) as WAMessage
+    const c = normalizeMessageContent(msg.message)
+    const tipo = tipoDeMidia(c)
+    if (!tipo) throw new Error('mensagem sem mídia')
+    const parte = c!.imageMessage ?? c!.videoMessage ?? c!.audioMessage ?? c!.documentMessage!
+    const mimetype = parte.mimetype ?? 'application/octet-stream'
+    const nome = c!.documentMessage?.fileName ?? null
+    const dados = await this.baixarMidia(bruto)
+    return { dados, midia: { tipo, mimetype, nome }, ext: extensaoDe(mimetype, nome) }
   }
 
   async listarGrupos(): Promise<InfoGrupo[]> {
@@ -443,6 +488,17 @@ export class ConexaoBaileys implements ConexaoEnvio, ConexaoGrupos {
     await rm(this.o.pastaSessao, { recursive: true, force: true })
     this.tentativas = 0
     await this.iniciar()
+  }
+
+  /**
+   * Revogar: desconecta o aparelho no celular (o número some de "Aparelhos conectados") e começa uma
+   * sessão nova, que mostra um QR para outro número (ou o mesmo) ser conectado.
+   */
+  async revogar(): Promise<void> {
+    const sock = this.sock
+    this.parado = true
+    if (sock && this.estado.status === 'conectado') await sock.logout().catch(() => undefined)
+    await this.novaSessao()
   }
 
   async parar(): Promise<void> {

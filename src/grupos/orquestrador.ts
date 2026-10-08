@@ -1,21 +1,23 @@
 import type { Logger } from 'pino'
-import type { BotGrupos, RepoBotsGrupos } from '../db/bots-grupos.js'
+import type { ArmazemArquivos } from '../arquivos.js'
+import type { BotGrupos, Midia, RepoBotsGrupos } from '../db/bots-grupos.js'
 import type { Funcionario, RepoGrupos } from '../db/grupos.js'
 import type { Repositorio } from '../db/repositorio.js'
-import { comandosDoBot } from './catalogo.js'
-import { acharComando, interpretar, type Comando } from './comandos.js'
-import { processarComando } from './motor.js'
-import { pessoaDoJid, chaveTelefoneDeJid, usuarioDoJid, vinculosDeLid } from './pessoas.js'
+import { acharComando, ehComando, interpretar, type DefComando, type NomeComando } from './comandos.js'
+import { alvoDe, palavraProibida, processar } from './motor.js'
+import { acharFuncionario, chaveTelefoneDeJid, pessoaDoJid, usuarioDoJid, vinculosDeLid } from './pessoas.js'
 import type {
   AcaoGrupo,
   ConexaoGrupos,
   ContextoGrupos,
+  Entrada,
   EnvioGrupo,
   EventoGrupos,
   GrupoDoBot,
   MembroGrupo,
   MensagemGrupo,
-  Pessoa
+  Pessoa,
+  Sessao
 } from './tipos.js'
 
 export interface DependenciasGrupos {
@@ -23,26 +25,21 @@ export interface DependenciasGrupos {
   repo: Repositorio
   grupos: RepoGrupos
   bots: RepoBotsGrupos
-  /** Conexão do número; null se estiver desativado. */
+  armazem: ArmazemArquivos
+  /** Conexão do número; null se estiver desligado. */
   conexao: (numeroId: number) => ConexaoGrupos | null
   log: Logger
   relogio?: () => number
-  conectadoDesde?: (numeroId: number) => number | null
-  /** Telefone conectado no número (para o link wa.me que acompanha o código de gestor). */
-  telefoneDoNumero?: (numeroId: number) => string | null
+  /** Número pausado: conectado, mas o bot não lê nada. */
+  pausado?: (numeroId: number) => boolean
   /** Avisado quando há algo novo na caixa de saída do número. */
   aoEnfileirar?: (numeroId: number) => void
+  /** Avisado quando um /mutegroup ou /unmute mudou o horário de um grupo (o agendador aplica na hora). */
+  aoMudarSilencio?: () => void
 }
 
 /** Comando mais velho que isso (fila do WhatsApp ao reconectar) não é executado. */
 export const JANELA_COMANDO_MS = 10 * 60 * 1000
-
-/** Mesma pessoa repetindo o mesmo comando comum neste chat: ignorado se mais rápido que isto. */
-const JANELA_REPETICAO_REMETENTE_MS = 60 * 1000
-/** Qualquer pessoa repetindo o mesmo comando comum neste chat: ignorado se mais rápido que isto. */
-const JANELA_REPETICAO_CHAT_MS = 15 * 1000
-/** Tamanho máximo da memória do freio antes de descartar entradas antigas. */
-const LIMITE_MEMORIA_REPETICAO = 5000
 
 /** Códigos errados de /confirmar aceitos por hora antes do silêncio: por pessoa e no bot inteiro. */
 export const ERROS_CODIGO_POR_PESSOA = 5
@@ -51,87 +48,118 @@ const JANELA_ERROS_CODIGO_MS = 60 * 60 * 1000
 
 const FALHA = 'Não consegui concluir esse comando agora. Tente de novo em instantes.'
 
+/** Comandos que, mandados no privado com uma foto (ou citando uma), levam a mídia para o grupo. */
+const LEVAM_MIDIA = new Set<NomeComando>(['all', 'todos', 'mencionar'])
+
 /**
- * Liga os comandos ao motor. Cada número atende o bot de grupos ligado a ele, e só nos grupos que o
- * bot tem como ativos: fora deles, nada é lido nem guardado. Tudo que depende do WhatsApp
- * (LID → telefone, dados do grupo) acontece antes; depois, dedupe + mudanças + respostas + auditoria
- * vão numa transação só. Se o processo cair antes dela, o comando não aconteceu e o gestor manda de novo.
+ * Liga as mensagens ao motor. Cada número atende o bot de grupos ligado a ele, e só nos grupos que o
+ * bot tem como ativos: fora deles, nada é lido nem guardado. Do que chega de um grupo ativo, só comandos,
+ * respostas que o bot está esperando e mensagens com palavra proibida passam daqui — o resto é descartado
+ * na hora, sem banco e sem log. Tudo que depende do WhatsApp (LID → telefone, participantes, mídia)
+ * acontece antes; depois, dedupe + mudanças + envios + auditoria vão numa transação só.
  */
 export class OrquestradorGrupos {
   private filas = new Map<string, Promise<void>>()
   private readonly relogio: () => number
-  /** Último horário em que (número, chat, remetente, comando) foi aceito. */
-  private readonly ultimoPorRemetente = new Map<string, number>()
-  /** Último horário em que (número, chat, comando) foi aceito, de qualquer remetente. */
-  private readonly ultimoPorChat = new Map<string, number>()
   /** Horários dos códigos errados de /confirmar, por "bot:remetente" e por "bot". */
   private readonly errosCodigo = new Map<string, number[]>()
-  private sincronizando = new Map<number, Promise<void>>()
+  /** Conversa com cada gestor, por "bot:chat:remetente". */
+  private readonly sessoes = new Map<string, Sessao>()
+  /** Última menção a todos, por "bot:grupo". */
+  private readonly mencoesEmMassa = new Map<string, number>()
 
   constructor(private readonly d: DependenciasGrupos) {
     this.relogio = d.relogio ?? Date.now
   }
 
-  /**
-   * Comandos do mesmo chat são tratados em ordem; chats diferentes não esperam uns pelos outros.
-   * Comando comum (não de gestor) repetido rápido demais no mesmo grupo é descartado aqui mesmo,
-   * antes de entrar na fila: nem dedupe, nem resposta — só um freio contra spam, não contra reenvio.
-   */
+  /** Mensagens do mesmo chat são tratadas em ordem; chats diferentes não esperam uns pelos outros. */
   receber(m: MensagemGrupo): void {
+    if (this.d.pausado?.(m.numeroId)) return
     const bot = this.d.bots.botDoNumero(m.numeroId)
     if (!bot) return
     // Grupo que o bot não tem como ativo: silêncio total, sem nem a linha de dedupe.
     if (m.ehGrupo && !this.d.bots.grupoAtivo(bot.id, m.chat)) return
-    const cmd = interpretar(m.texto, m.mencionados, m.citada)
     const agora = this.relogio()
-    if (cmd && m.ehGrupo && this.comandoComum(bot.id, cmd) && !this.podeProcessar(m, cmd, agora)) {
-      this.d.log.debug({ mensagem: m.id, numero: m.numeroId }, 'comando comum ignorado por repetição rápida')
-      return
-    }
-    if (cmd?.nome === 'confirmar' && !m.ehGrupo && this.codigoBloqueado(bot.id, m.remetente.jid, agora)) {
-      this.d.log.warn({ mensagem: m.id, numero: m.numeroId, bot: bot.id }, 'tentativas de código demais: /confirmar ignorado')
-      return
-    }
+    let tarefa: () => Promise<void>
+    if (ehComando(m.texto)) {
+      const cmd = interpretar(m.texto)
+      if (acharComando(cmd?.nome ?? '')?.nome === 'confirmar' && !m.ehGrupo && this.codigoBloqueado(bot.id, m.remetente.jid, agora)) {
+        this.d.log.warn({ mensagem: m.id, numero: m.numeroId, bot: bot.id }, 'tentativas de código demais: /confirmar ignorado')
+        return
+      }
+      tarefa = () => this.tratar(m, { tipo: 'comando', texto: m.texto }, bot.id, false)
+    } else if (this.sessao(this.chaveSessao(bot.id, m), agora)?.aguardando) {
+      tarefa = () => this.tratar(m, { tipo: 'resposta', texto: m.texto.trim() }, bot.id, false)
+    } else if (m.ehGrupo && palavraProibida(m.texto, this.d.bots.palavras(bot.id, m.chat))) {
+      tarefa = () => this.moderar(m, bot.id)
+    } else return
     const chave = `${m.numeroId}:${m.chat}`
     const anterior = this.filas.get(chave) ?? Promise.resolve()
     const proxima = anterior
-      .then(() => this.tratar(m, cmd, bot.id))
-      .catch((err) => this.d.log.error({ err, mensagem: m.id, numero: m.numeroId }, 'falha inesperada no comando'))
+      .then(tarefa)
+      .catch((err) => this.d.log.error({ err, mensagem: m.id, numero: m.numeroId }, 'falha inesperada no bot de grupos'))
       .finally(() => {
         if (this.filas.get(chave) === proxima) this.filas.delete(chave)
       })
     this.filas.set(chave, proxima)
   }
 
-  /** Comando que qualquer um pode mandar (pronto não-gestor ou personalizado "todos"): passa pelo freio. */
-  private comandoComum(botId: number, cmd: Comando): boolean {
-    const def = acharComando(cmd.nome)
-    if (def) return !def.gestor
-    const p = this.d.bots.comandos(botId).get(cmd.nome)
-    return !!p?.personalizado && p.quem === 'todos'
+  /** Espera todas as filas terminarem (testes e desligamento). */
+  async ocioso(): Promise<void> {
+    while (this.filas.size > 0) await Promise.all([...this.filas.values()])
   }
 
-  /** Decide e, se aceitar, já marca o horário (false não marca: permite tentar de novo logo). */
-  private podeProcessar(m: MensagemGrupo, cmd: Comando, agora: number): boolean {
-    const chaveRemetente = `${m.numeroId}:${m.chat}:${m.remetente.jid}:${cmd.nome}`
-    const chaveChat = `${m.numeroId}:${m.chat}:${cmd.nome}`
-    const ultimoRemetente = this.ultimoPorRemetente.get(chaveRemetente)
-    if (ultimoRemetente !== undefined && agora - ultimoRemetente < JANELA_REPETICAO_REMETENTE_MS) return false
-    const ultimoChat = this.ultimoPorChat.get(chaveChat)
-    if (ultimoChat !== undefined && agora - ultimoChat < JANELA_REPETICAO_CHAT_MS) return false
-    this.marcarRepeticao(this.ultimoPorRemetente, chaveRemetente, agora, JANELA_REPETICAO_REMETENTE_MS)
-    this.marcarRepeticao(this.ultimoPorChat, chaveChat, agora, JANELA_REPETICAO_CHAT_MS)
-    return true
-  }
-
-  /** Grava o horário; se a memória cresceu demais, aproveita para jogar fora quem já saiu da janela. */
-  private marcarRepeticao(mapa: Map<string, number>, chave: string, agora: number, janela: number): void {
-    mapa.set(chave, agora)
-    if (mapa.size <= LIMITE_MEMORIA_REPETICAO) return
-    for (const [k, v] of mapa) {
-      if (agora - v > janela) mapa.delete(k)
+  /** Mantém a lista geral de grupos igual ao que o WhatsApp informa. */
+  eventoGrupos(numeroId: number, e: EventoGrupos): void {
+    const g = this.d.grupos
+    const agora = this.relogio()
+    try {
+      this.d.repo.transacao(() => {
+        switch (e.tipo) {
+          case 'lista':
+            for (const x of e.grupos) g.salvarGrupo(numeroId, x.jid, x.nome, x.botAdmin, agora)
+            g.desativarAusentes(numeroId, e.grupos.map((x) => x.jid), agora)
+            return
+          case 'entrou':
+            for (const x of e.grupos) g.salvarGrupo(numeroId, x.jid, x.nome, x.botAdmin, agora)
+            return
+          case 'renomeado':
+            return g.renomearGrupo(numeroId, e.jid, e.nome, agora)
+          case 'admin':
+            return g.definirBotAdmin(numeroId, e.jid, e.admin, agora)
+          case 'saiu':
+            return g.desativarGrupo(numeroId, e.jid, agora)
+        }
+      })
+    } catch (err) {
+      this.d.log.error({ err, numero: numeroId, evento: e.tipo }, 'falha ao atualizar grupos')
     }
   }
+
+  // --- sessões ----------------------------------------------------------------------
+
+  private chaveSessao(botId: number, m: MensagemGrupo): string {
+    return `${botId}:${m.chat}:${m.remetente.jid}`
+  }
+
+  private sessao(chave: string, agora: number): Sessao | null {
+    const s = this.sessoes.get(chave)
+    if (!s) return null
+    if (s.ate > agora) return s
+    this.sessoes.delete(chave)
+    return null
+  }
+
+  private guardarSessao(chave: string, s: Sessao | null): void {
+    if (s) this.sessoes.set(chave, s)
+    else this.sessoes.delete(chave)
+    if (this.sessoes.size > 2000) {
+      const agora = this.relogio()
+      for (const [k, v] of this.sessoes) if (v.ate <= agora) this.sessoes.delete(k)
+    }
+  }
+
+  // --- limite de tentativas de código ----------------------------------------------
 
   private errosRecentes(chave: string, agora: number): number[] {
     const lista = (this.errosCodigo.get(chave) ?? []).filter((t) => agora - t < JANELA_ERROS_CODIGO_MS)
@@ -152,164 +180,7 @@ export class OrquestradorGrupos {
     for (const chave of [`${botId}:${remetente}`, `${botId}`]) this.errosCodigo.set(chave, [...this.errosRecentes(chave, agora), agora])
   }
 
-  /** Espera todas as filas e sincronizações terminarem (testes e desligamento). */
-  async ocioso(): Promise<void> {
-    while (this.filas.size > 0 || this.sincronizando.size > 0) {
-      await Promise.all([...this.filas.values(), ...this.sincronizando.values()])
-    }
-  }
-
-  /** Mantém a lista geral de grupos igual ao que o WhatsApp informa, e os participantes dos grupos ativos. */
-  eventoGrupos(numeroId: number, e: EventoGrupos): void {
-    const g = this.d.grupos
-    const agora = this.relogio()
-    try {
-      this.d.repo.transacao(() => {
-        switch (e.tipo) {
-          case 'lista':
-            for (const x of e.grupos) g.salvarGrupo(numeroId, x.jid, x.nome, x.botAdmin, agora)
-            g.desativarAusentes(numeroId, e.grupos.map((x) => x.jid), agora)
-            return
-          case 'entrou':
-            for (const x of e.grupos) g.salvarGrupo(numeroId, x.jid, x.nome, x.botAdmin, agora)
-            return
-          case 'renomeado':
-            return g.renomearGrupo(numeroId, e.jid, e.nome, agora)
-          case 'admin':
-            return g.definirBotAdmin(numeroId, e.jid, e.admin, agora)
-          case 'saiu':
-            return g.desativarGrupo(numeroId, e.jid, agora)
-          case 'participantes':
-            return this.mudarParticipantes(numeroId, e)
-        }
-      })
-    } catch (err) {
-      this.d.log.error({ err, numero: numeroId, evento: e.tipo }, 'falha ao atualizar grupos')
-    }
-    // Ao conectar, os participantes guardados podem estar velhos (mudanças com o número desligado).
-    if (e.tipo === 'lista') void this.sincronizarParticipantes(numeroId)
-  }
-
-  private mudarParticipantes(numeroId: number, e: Extract<EventoGrupos, { tipo: 'participantes' }>): void {
-    const bot = this.d.bots.botDoNumero(numeroId)
-    if (!bot || !this.d.bots.grupoAtivo(bot.id, e.jid)) return
-    const b = this.d.bots
-    switch (e.acao) {
-      case 'add':
-        return b.adicionarParticipantes(bot.id, e.jid, e.membros)
-      case 'remove':
-        return b.removerParticipantes(bot.id, e.jid, e.membros.map((x) => x.jid))
-      case 'promote':
-      case 'demote':
-        for (const x of e.membros) b.definirAdminParticipante(bot.id, e.jid, x.jid, e.acao === 'promote')
-    }
-  }
-
-  /** Relê os participantes de todos os grupos ativos do bot deste número, um grupo por vez. */
-  sincronizarParticipantes(numeroId: number): Promise<void> {
-    const emAndamento = this.sincronizando.get(numeroId)
-    if (emAndamento) return emAndamento
-    const tarefa = (async () => {
-      const bot = this.d.bots.botDoNumero(numeroId)
-      if (!bot) return
-      for (const g of this.d.bots.gruposAtivos(bot.id)) {
-        try {
-          await this.sincronizarGrupo(bot.id, g.jid)
-        } catch (err) {
-          this.d.log.warn({ err, numero: numeroId }, 'não foi possível reler os participantes de um grupo ativo')
-        }
-      }
-    })().finally(() => this.sincronizando.delete(numeroId))
-    this.sincronizando.set(numeroId, tarefa)
-    return tarefa
-  }
-
-  /**
-   * Relê um grupo ativo e guarda os participantes. Devolve false se o número do bot não está
-   * conectado agora (o painel avisa que a leitura fica para quando conectar). Erros do WhatsApp sobem.
-   */
-  async sincronizarGrupo(botId: number, jid: string): Promise<boolean> {
-    const bot = this.d.bots.bot(botId)
-    const conexao = bot?.numeroId ? this.d.conexao(bot.numeroId) : null
-    if (!bot?.numeroId || !conexao?.pronta()) return false
-    const md = await conexao.metadados(jid)
-    const membros = await Promise.all(md.membros.map(async (x) => ({ ...(await this.completar(conexao, x)), admin: x.admin })))
-    const numeroId = bot.numeroId
-    this.d.repo.transacao(() => {
-      this.d.grupos.salvarGrupo(numeroId, md.jid, md.nome, md.botAdmin, this.relogio())
-      // Pode ter sido desativado enquanto o WhatsApp respondia: aí não guarda nada.
-      if (this.d.bots.grupoAtivo(botId, jid)) this.d.bots.substituirParticipantes(botId, jid, membros)
-    })
-    return true
-  }
-
-  private async tratar(m: MensagemGrupo, cmd: Comando | null, botId: number): Promise<void> {
-    const atraso = this.relogio() - m.recebidaEm
-    if (atraso > JANELA_COMANDO_MS) {
-      this.d.log.debug({ mensagem: m.id, atraso }, 'comando antigo (fila ao reconectar) ignorado')
-      return
-    }
-    if (this.d.grupos.comandoVisto(m.numeroId, m.id)) return
-    if (!cmd) return
-    const bot = this.d.bots.bot(botId)
-    if (!bot?.ativo || bot.numeroId !== m.numeroId) return
-    const conexao = this.d.conexao(m.numeroId)
-    const def = acharComando(cmd.nome)
-    const precisaMembros = !!def?.precisaMembros
-
-    let remetente = await this.completar(conexao, m.remetente)
-    const mencionados = await Promise.all(m.mencionados.map((j) => this.completar(conexao, pessoaDoJid(j))))
-    const citada = m.citada ? await this.completar(conexao, pessoaDoJid(m.citada)) : null
-    const membros = m.ehGrupo ? await this.lerGrupo(conexao, m, bot.id, precisaMembros) : null
-
-    // Daqui em diante é síncrono: o retrato do banco e a gravação não se intercalam com outro comando.
-    const agora = this.relogio()
-    const g = this.d.grupos
-    const funcionarios = g.funcionarios()
-    // O WhatsApp pode não informar o telefone do LID desta vez; se a pessoa já está no cadastro
-    // com esse LID (de uma mensagem anterior), usa o telefone de lá em vez de identificar pelo LID cru.
-    if (!remetente.telefone && remetente.lid) {
-      const porLid = funcionarios.find((f) => f.lid === remetente.lid)
-      if (porLid?.telefone) remetente = { ...remetente, telefone: porLid.telefone }
-    }
-    const grupos = this.gruposDoBot(bot)
-    const gestores = this.d.bots.gestores(bot.id)
-    const ctx: ContextoGrupos = {
-      agora,
-      bot: { id: bot.id, nome: bot.nome },
-      comandos: comandosDoBot(this.d.bots.comandos(bot.id)),
-      chat: m.chat,
-      ehGrupo: m.ehGrupo,
-      remetente,
-      mencionados,
-      citada,
-      funcionarios,
-      gestores: new Set(gestores.filter((x) => x.confirmadoEm !== null).map((x) => x.funcionarioId)),
-      pendentes: gestores
-        .filter((x) => x.confirmadoEm === null)
-        .map((x) => ({ funcionarioId: x.funcionarioId, codigo: x.codigo, expiraEm: x.codigoExpiraEm })),
-      grupo: m.ehGrupo ? (grupos.find((x) => x.jid === m.chat) ?? null) : null,
-      grupos,
-      membros: precisaMembros ? membros : null,
-      auditoria: this.d.repo.auditoriaRecente(30),
-      conectadoDesde: this.d.conectadoDesde?.(m.numeroId) ?? null
-    }
-    const acoes = processarComando(ctx, cmd)
-    // Comando ignorado (silêncio) não muda nada no banco além do dedupe: nem liga LID.
-    const vistos = [remetente, ...mencionados, ...(citada ? [citada] : []), ...(ctx.membros ?? [])]
-    const vinculos = acoes.length > 0 ? vinculosDeLid(funcionarios, vistos) : []
-    const usuario = `wa:${remetente.telefone ?? remetente.lid ?? usuarioDoJid(remetente.jid)}`
-    let enfileirou = false
-    try {
-      enfileirou = this.aplicar(m, bot, acoes, vinculos, funcionarios, usuario, agora)
-    } catch (err) {
-      this.d.log.error({ err, mensagem: m.id, numero: m.numeroId }, 'erro ao executar comando')
-      if (acoes.length > 0) enfileirou = this.aplicar(m, bot, [{ tipo: 'responder', texto: FALHA }], [], funcionarios, usuario, agora)
-    }
-    if (acoes.some((a) => a.tipo === 'codigo_errado')) this.registrarErroCodigo(bot.id, m.remetente.jid, agora)
-    // Fora do try: um erro do próprio avisador não deve disparar a resposta de falha por engano.
-    if (enfileirou) this.d.aoEnfileirar?.(m.numeroId)
-  }
+  // --- tratamento ---------------------------------------------------------------------
 
   /** Grupos ativos do bot com nome e admin da lista geral do número atual. */
   private gruposDoBot(bot: BotGrupos): GrupoDoBot[] {
@@ -318,9 +189,19 @@ export class OrquestradorGrupos {
       .gruposAtivos(bot.id)
       .map((a) => {
         const x = geral.get(a.jid)
-        return { jid: a.jid, nome: x?.nome ?? a.jid, botAdmin: x?.botAdmin ?? false, loja: a.loja, setor: a.setor }
+        return { jid: a.jid, nome: x?.nome ?? 'Grupo', botAdmin: x?.botAdmin ?? false }
       })
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+  }
+
+  /** Gestores do bot (confirmados ou pendentes) com o cadastro. */
+  private pessoasDoBot(botId: number): { pessoas: Funcionario[]; gestores: ReturnType<RepoBotsGrupos['gestores']> } {
+    const gestores = this.d.bots.gestores(botId)
+    const pessoas = gestores.flatMap((x) => {
+      const f = this.d.grupos.funcionario(x.funcionarioId)
+      return f ? [f] : []
+    })
+    return { pessoas, gestores }
   }
 
   /** Descobre o telefone por trás do LID quando o WhatsApp sabe (de qualquer país, sem assumir Brasil). */
@@ -334,72 +215,232 @@ export class OrquestradorGrupos {
     }
   }
 
-  /**
-   * Grupo desconhecido (evento perdido) é lido e gravado uma vez. Participantes vêm do que está
-   * guardado (mantido pelos eventos); só quando ainda não há nada guardado o grupo é lido do WhatsApp.
-   */
-  private async lerGrupo(conexao: ConexaoGrupos | null, m: MensagemGrupo, botId: number, precisaMembros: boolean): Promise<MembroGrupo[] | null> {
-    const conhecido = this.d.grupos.grupo(m.numeroId, m.chat)
-    const guardados = precisaMembros ? this.d.bots.participantes(botId, m.chat) : []
-    if (conhecido?.ativo && (!precisaMembros || guardados.length > 0)) return precisaMembros ? guardados : null
-    if (!conexao) return null
+  /** Participantes do grupo (do cache da conexão). Também atualiza nome e admin na lista geral. */
+  private async lerMembros(conexao: ConexaoGrupos | null, numeroId: number, jid: string, comTelefone: boolean): Promise<MembroGrupo[] | null> {
+    if (!conexao?.pronta()) return null
     try {
-      const md = await conexao.metadados(m.chat)
-      const membros = precisaMembros
-        ? await Promise.all(md.membros.map(async (x) => ({ ...(await this.completar(conexao, x)), admin: x.admin })))
-        : null
-      this.d.repo.transacao(() => {
-        this.d.grupos.salvarGrupo(m.numeroId, md.jid, md.nome, md.botAdmin, this.relogio())
-        if (membros && this.d.bots.grupoAtivo(botId, m.chat)) this.d.bots.substituirParticipantes(botId, m.chat, membros)
-      })
-      return membros
+      const md = await conexao.metadados(jid)
+      this.d.grupos.salvarGrupo(numeroId, md.jid, md.nome, md.botAdmin, this.relogio())
+      if (!comTelefone) return md.membros.map((x) => ({ ...x, telefone: chaveTelefoneDeJid(x.telefone) }))
+      return await Promise.all(md.membros.map(async (x) => ({ ...(await this.completar(conexao, x)), admin: x.admin })))
     } catch (err) {
-      this.d.log.warn({ err, numero: m.numeroId }, 'não foi possível ler os dados do grupo')
+      this.d.log.warn({ err, numero: numeroId }, 'não foi possível ler os participantes do grupo')
       return null
     }
   }
 
-  /** Devolve true se algo foi enfileirado para sair (quem chama avisa o remetente depois, fora da transação). */
+  /** Baixa e guarda a mídia de uma mensagem. Falha vira null (o comando segue sem a mídia, ou responde o erro). */
+  private async baixar(conexao: ConexaoGrupos | null, bruto: string | null): Promise<Midia | null> {
+    if (!bruto || !conexao?.pronta()) return null
+    try {
+      const { dados, midia, ext } = await conexao.baixarMidiaGrupo(bruto)
+      return { ...midia, caminho: await this.d.armazem.salvarMidia(ext, dados) }
+    } catch (err) {
+      this.d.log.warn({ err }, 'não foi possível baixar a mídia da mensagem')
+      return null
+    }
+  }
+
+  private async tratar(m: MensagemGrupo, entrada: Entrada, botId: number, reexecucao: boolean): Promise<void> {
+    const atraso = this.relogio() - m.recebidaEm
+    if (atraso > JANELA_COMANDO_MS) {
+      this.d.log.debug({ mensagem: m.id, atraso }, 'comando antigo (fila ao reconectar) ignorado')
+      return
+    }
+    if (!reexecucao && this.d.grupos.comandoVisto(m.numeroId, m.id)) return
+    const bot = this.d.bots.bot(botId)
+    if (!bot?.ativo || bot.numeroId !== m.numeroId) return
+    const conexao = this.d.conexao(m.numeroId)
+    const chaveSessao = this.chaveSessao(bot.id, m)
+    const sessao = this.sessao(chaveSessao, this.relogio())
+    const grupos = this.gruposDoBot(bot)
+    const alvo = alvoDe(m.ehGrupo, m.chat, grupos, sessao)
+    const def: DefComando | null = entrada.tipo === 'comando' ? acharComando(interpretar(entrada.texto)?.nome ?? '') : null
+
+    // Só quem é gestor confirmado faz o bot trabalhar (ler participantes, baixar mídia).
+    const { pessoas, gestores } = this.pessoasDoBot(bot.id)
+    let remetente = await this.completar(conexao, m.remetente)
+    if (!remetente.telefone && remetente.lid) {
+      const porLid = pessoas.find((f) => f.lid === remetente.lid)
+      if (porLid?.telefone) remetente = { ...remetente, telefone: porLid.telefone }
+    }
+    const autor = acharFuncionario(pessoas, remetente)
+    const confirmados = new Set(gestores.filter((x) => x.confirmadoEm !== null).map((x) => x.funcionarioId))
+    const ehGestor = !!autor?.ativo && confirmados.has(autor.id)
+
+    const mencionados = await Promise.all(m.mencionados.map((j) => this.completar(conexao, pessoaDoJid(j))))
+    const autorCitada = m.citada?.autor ? await this.completar(conexao, pessoaDoJid(m.citada.autor)) : null
+    const precisaMembros = ehGestor && !!def?.precisaMembros && !!alvo
+    const comTelefone = !m.ehGrupo && (def?.nome === 'mencionar' || def?.nome === 'remove')
+    const membros = precisaMembros ? await this.lerMembros(conexao, m.numeroId, alvo!.jid, comTelefone) : null
+
+    const repetindo = def?.nome === 'repeat' || (entrada.tipo === 'resposta' && sessao?.aguardando === 'repeat')
+    const levaMidia = !m.ehGrupo && !!def && LEVAM_MIDIA.has(def.nome)
+    const midia = ehGestor && levaMidia ? await this.baixar(conexao, m.midia) : null
+    const midiaCitada = ehGestor && (repetindo || (levaMidia && !midia)) ? await this.baixar(conexao, m.citada?.midia ?? null) : null
+
+    // Daqui em diante é síncrono: o retrato do banco e a gravação não se intercalam com outro comando.
+    const agora = this.relogio()
+    const ctx: ContextoGrupos = {
+      agora,
+      bot: { id: bot.id, nome: bot.nome },
+      desligados: this.d.bots.desligados(bot.id) as Set<NomeComando>,
+      chat: m.chat,
+      ehGrupo: m.ehGrupo,
+      mensagem: { chat: m.chat, id: m.id, participante: m.ehGrupo ? m.remetente.jid : null },
+      remetente,
+      mencionados,
+      citada: m.citada ? { autor: autorCitada, texto: m.citada.texto, midia: midiaCitada } : null,
+      midia,
+      pessoas,
+      gestores: confirmados,
+      pendentes: gestores
+        .filter((x) => x.confirmadoEm === null)
+        .map((x) => ({ funcionarioId: x.funcionarioId, codigo: x.codigo, expiraEm: x.codigoExpiraEm })),
+      grupos,
+      sessao,
+      alvo,
+      membros,
+      palavras: alvo ? this.d.bots.palavras(bot.id, alvo.jid) : [],
+      ultimaMencaoEmMassa: alvo ? (this.mencoesEmMassa.get(`${bot.id}:${alvo.jid}`) ?? null) : null
+    }
+    const acoes = processar(ctx, entrada)
+    const vistos = [remetente, ...mencionados, ...(autorCitada ? [autorCitada] : [])]
+    const vinculos = acoes.length > 0 ? vinculosDeLid(pessoas, vistos) : []
+    const usuario = `wa:${remetente.telefone ?? remetente.lid ?? usuarioDoJid(remetente.jid)}`
+    let r: Resultado = { enfileirou: false, executar: null, silencio: false, midiasUsadas: new Set(), soltas: [] }
+    try {
+      r = this.aplicar(m, bot, acoes, vinculos, pessoas, usuario, agora, chaveSessao, reexecucao)
+    } catch (err) {
+      this.d.log.error({ err, mensagem: m.id, numero: m.numeroId }, 'erro ao executar comando')
+      if (acoes.length > 0) r = this.aplicar(m, bot, [{ tipo: 'responder', texto: FALHA }], [], pessoas, usuario, agora, chaveSessao, reexecucao)
+    }
+    if (acoes.some((a) => a.tipo === 'codigo_errado')) this.registrarErroCodigo(bot.id, m.remetente.jid, agora)
+    for (const x of [midia, midiaCitada]) if (x && !r.midiasUsadas.has(x.caminho)) r.soltas.push(x.caminho)
+    for (const caminho of r.soltas) await this.d.armazem.apagar(caminho).catch(() => undefined)
+    if (acoes.length > 0 && conexao?.pronta()) {
+      await conexao.marcarLida({ chat: m.chat, id: m.id, participante: m.ehGrupo ? m.remetente.jid : null }).catch(() => undefined)
+    }
+    // Fora do try: um erro do próprio avisador não deve disparar a resposta de falha por engano.
+    if (r.enfileirou) this.d.aoEnfileirar?.(m.numeroId)
+    if (r.silencio) this.d.aoMudarSilencio?.()
+    if (r.executar && !reexecucao) await this.tratar(m, { tipo: 'comando', texto: r.executar }, bot.id, true)
+  }
+
+  /** Mensagem com palavra proibida, de quem não é gestor nem admin do grupo: apagada (se o número for admin). */
+  private async moderar(m: MensagemGrupo, botId: number): Promise<void> {
+    if (this.relogio() - m.recebidaEm > JANELA_COMANDO_MS) return
+    if (this.d.grupos.comandoVisto(m.numeroId, m.id)) return
+    const bot = this.d.bots.bot(botId)
+    if (!bot?.ativo || bot.numeroId !== m.numeroId) return
+    const conexao = this.d.conexao(m.numeroId)
+    if (!conexao?.pronta()) return
+    let md
+    try {
+      md = await conexao.metadados(m.chat)
+    } catch (err) {
+      this.d.log.warn({ err, numero: m.numeroId }, 'não foi possível ler o grupo para moderar')
+      return
+    }
+    if (!md.botAdmin) return
+    const autor = md.membros.find((x) => x.jid === m.remetente.jid || (!!m.remetente.lid && x.lid === m.remetente.lid))
+    if (autor?.admin) return
+    const remetente = await this.completar(conexao, m.remetente)
+    const { pessoas, gestores } = this.pessoasDoBot(bot.id)
+    const f = acharFuncionario(pessoas, remetente)
+    if (f && gestores.some((x) => x.funcionarioId === f.id && x.confirmadoEm !== null)) return
+    const agora = this.relogio()
+    const envio: EnvioGrupo = { tipo: 'apagar', chave: { chat: m.chat, id: m.id, participante: m.remetente.jid } }
+    let enfileirou = false
+    this.d.repo.transacao(() => {
+      if (!this.d.grupos.registrarComando(m.numeroId, m.id, m.chat, m.recebidaEm)) return
+      this.d.grupos.enfileirarSaida(m.numeroId, m.chat, JSON.stringify(envio), agora)
+      this.d.repo.auditar('bot', 'mensagem_apagada', `${md.nome}: palavra proibida`, agora)
+      enfileirou = true
+    })
+    if (enfileirou) this.d.aoEnfileirar?.(m.numeroId)
+  }
+
   private aplicar(
     m: MensagemGrupo,
     bot: BotGrupos,
     acoes: AcaoGrupo[],
     vinculos: { id: number; lid: string }[],
-    funcionarios: Funcionario[],
+    pessoas: Funcionario[],
     usuario: string,
-    agora: number
-  ): boolean {
+    agora: number,
+    chaveSessao: string,
+    reexecucao: boolean
+  ): Resultado {
     const g = this.d.grupos
     const b = this.d.bots
-    let enfileirou = false
+    const r: Resultado = { enfileirou: false, executar: null, silencio: false, midiasUsadas: new Set(), soltas: [] }
     const enviar = (jid: string, envio: EnvioGrupo) => {
       g.enfileirarSaida(m.numeroId, jid, JSON.stringify(envio), agora)
-      enfileirou = true
+      if (envio.tipo === 'midia') r.midiasUsadas.add(envio.midia.caminho)
+      r.enfileirou = true
     }
+    const sessoes: (Sessao | null)[] = []
+    const mencoes: string[] = []
     this.d.repo.transacao(() => {
       // Outra entrega da mesma mensagem pode ter passado enquanto esta esperava o WhatsApp.
-      if (!g.registrarComando(m.numeroId, m.id, m.chat, m.recebidaEm)) return
+      if (!reexecucao && !g.registrarComando(m.numeroId, m.id, m.chat, m.recebidaEm)) return
       for (const v of vinculos) g.vincularLid(v.id, v.lid, agora)
       for (const a of acoes) {
         switch (a.tipo) {
           case 'responder':
             enviar(m.chat, { tipo: 'texto', texto: a.texto, ...(a.mencoes ? { mencoes: a.mencoes } : {}) })
             break
-          case 'salvar_funcionario':
-            g.salvarFuncionario(a.id, a.dados, agora)
+          case 'enviar':
+            enviar(a.jid, a.envio)
             break
-          case 'indicar_gestor': {
-            const codigo = b.indicarGestor(bot.id, a.funcionarioId, usuario, agora)
-            const nome = funcionarios.find((f) => f.id === a.funcionarioId)?.nome ?? 'a pessoa'
-            // O código nunca vai para o grupo: só para o privado de quem indicou, que repassa.
-            enviar(a.avisar.jid, { tipo: 'texto', texto: this.mensagemCodigo(bot, nome, codigo) })
+          case 'sessao':
+            sessoes.push(a.sessao)
             break
-          }
-          case 'remover_gestor':
-            b.removerGestor(bot.id, a.funcionarioId)
+          case 'executar':
+            r.executar = a.texto
+            break
+          case 'mencao_em_massa':
+            mencoes.push(a.jid)
+            break
+          case 'palavras':
+            b.adicionarPalavras(bot.id, a.jid, a.adicionar)
+            break
+          case 'palavras_remover':
+            b.removerPalavras(bot.id, a.jid, a.palavras)
+            break
+          case 'silencio':
+            b.definirSilencio(bot.id, a.jid, a.inicio, a.fim, usuario, agora)
+            r.silencio = true
+            break
+          case 'silencio_remover':
+            b.removerSilencio(bot.id, a.jid)
+            r.silencio = true
+            break
+          case 'repetir':
+            b.salvarProgramada(
+              null,
+              bot.id,
+              {
+                jid: a.jid,
+                origem: 'repeat',
+                horarios: a.horarios,
+                dias: [0, 1, 2, 3, 4, 5, 6],
+                data: null,
+                variar: false,
+                mencionar: false,
+                variacoes: [{ texto: a.texto, midia: a.midia }]
+              },
+              usuario,
+              agora
+            )
+            if (a.midia) r.midiasUsadas.add(a.midia.caminho)
+            break
+          case 'repetir_parar':
+            r.soltas.push(...b.excluirRepeticoes(bot.id, a.jid).midias.filter((x) => !b.midiasEmUso().has(x)))
             break
           case 'confirmar_gestor':
-            this.confirmar(bot.id, a.funcionarioId, a.pessoa, funcionarios, agora)
+            this.confirmar(bot.id, a.funcionarioId, a.pessoa, pessoas, agora)
             break
           case 'divergencia':
             b.registrarDivergencia(bot.id, a.funcionarioId, a.pessoa.jid, a.pessoa.telefone, agora)
@@ -412,27 +453,32 @@ export class OrquestradorGrupos {
         }
       }
     })
-    return enfileirou
+    // Memória só depois da transação: se ela falhou, nada disto vale.
+    for (const s of sessoes) this.guardarSessao(chaveSessao, s)
+    for (const jid of mencoes) this.mencoesEmMassa.set(`${bot.id}:${jid}`, agora)
+    return r
   }
 
   /** Confirma e completa o cadastro com o que a confirmação provou (telefone ou LID que faltavam). */
-  private confirmar(botId: number, funcionarioId: number, p: Pessoa, funcionarios: Funcionario[], agora: number): void {
+  private confirmar(botId: number, funcionarioId: number, p: Pessoa, pessoas: Funcionario[], agora: number): void {
     const g = this.d.grupos
     this.d.bots.confirmarGestor(botId, funcionarioId, p.jid, agora)
     g.confirmarFuncionario(funcionarioId, agora)
-    const f = funcionarios.find((x) => x.id === funcionarioId)
+    const f = pessoas.find((x) => x.id === funcionarioId)
     if (!f) return
-    const livre = (campo: 'telefone' | 'lid', valor: string) => !funcionarios.some((x) => x.id !== f.id && x[campo] === valor)
+    const todos = g.funcionarios()
+    const livre = (campo: 'telefone' | 'lid', valor: string) => !todos.some((x) => x.id !== f.id && x[campo] === valor)
     if (!f.telefone && p.telefone && livre('telefone', p.telefone)) g.definirTelefone(f.id, p.telefone, agora)
     if (!f.lid && p.lid && livre('lid', p.lid)) g.definirLid(f.id, p.lid, agora)
   }
+}
 
-  private mensagemCodigo(bot: BotGrupos, nome: string, codigo: string): string {
-    const telefone = bot.numeroId ? this.d.telefoneDoNumero?.(bot.numeroId) : null
-    const link = telefone ? `\nOu mande este link para ${nome}: https://wa.me/${telefone}?text=%2Fconfirmar%20${codigo}` : ''
-    return (
-      `🔐 Código para ${nome} virar gestor(a) do ${bot.nome}: ${codigo}\n` +
-      `Vale por 48 horas. Peça para ${nome} mandar no meu privado:\n/confirmar ${codigo}${link}`
-    )
-  }
+interface Resultado {
+  enfileirou: boolean
+  executar: string | null
+  silencio: boolean
+  /** Mídias baixadas que ficaram em uso (num envio ou numa repetição). */
+  midiasUsadas: Set<string>
+  /** Arquivos que podem ser apagados. */
+  soltas: string[]
 }

@@ -9,10 +9,6 @@ const ANA: DadosFuncionario = {
   nome: 'Ana Souza',
   telefone: '5583999990001',
   lid: null,
-  setor: 'Vendas',
-  loja: 'Centro',
-  cargo: 'Gerente',
-  nascimento: null,
   ativo: true
 }
 
@@ -46,8 +42,8 @@ describe('repositório do bot de grupos', () => {
     g.vincularLid(id, '111@lid', AGORA)
     g.vincularLid(id, '222@lid', AGORA)
     expect(g.funcionario(id)!.lid).toBe('111@lid')
-    g.salvarFuncionario(id, { ...ANA, cargo: null, ativo: false, lid: '111@lid' }, AGORA)
-    expect(g.funcionario(id)).toMatchObject({ cargo: null, ativo: false })
+    g.salvarFuncionario(id, { ...ANA, nome: 'Ana S.', ativo: false, lid: '111@lid' }, AGORA)
+    expect(g.funcionario(id)).toMatchObject({ nome: 'Ana S.', ativo: false })
     expect(g.funcionario(id)!.confirmadoEm).toBeNull()
     g.confirmarFuncionario(id, AGORA + 5)
     g.salvarFuncionario(id, { ...ANA, ativo: false, lid: '111@lid' }, AGORA + 6)
@@ -91,7 +87,7 @@ describe('repositório do bot de grupos', () => {
   })
 
   it('salvarFuncionario com id inexistente lança erro', () => {
-    expect(() => g.salvarFuncionario(999, ANA, AGORA)).toThrow('funcionário não encontrado')
+    expect(() => g.salvarFuncionario(999, ANA, AGORA)).toThrow('pessoa não encontrada')
   })
 
   it('enfileirarSaida com número inexistente lança erro (FK)', () => {

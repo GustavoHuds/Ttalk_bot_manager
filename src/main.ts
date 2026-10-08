@@ -11,6 +11,7 @@ import { RepoBotsGrupos } from './db/bots-grupos.js'
 import { RepoGrupos } from './db/grupos.js'
 import { RepoNumeros } from './db/numeros.js'
 import { Repositorio } from './db/repositorio.js'
+import { AgendaGrupos } from './grupos/agenda.js'
 import { ExpedidorGrupos } from './grupos/expedidor.js'
 import { OrquestradorGrupos } from './grupos/orquestrador.js'
 import { criarPainel } from './painel/servidor.js'
@@ -53,8 +54,12 @@ function conexaoAtiva(numeroId: number): ConexaoBaileys {
   return c
 }
 
+/** Pausado: o número continua conectado, mas nada é lido nem enviado. */
+const pausado = (numeroId: number) => numeros.numero(numeroId)?.pausado ?? false
+
 const orquestrador = new Orquestrador({
   repo,
+  pausado,
   config: () => config.get(),
   baixarMidia: (numeroId, bruto) => conexaoAtiva(numeroId).baixarMidia(bruto),
   armazem,
@@ -66,13 +71,21 @@ const orquestradorGrupos = new OrquestradorGrupos({
   repo,
   grupos,
   bots: botsGrupos,
+  armazem,
   conexao: (numeroId) => gerenciador.conexao(numeroId),
-  telefoneDoNumero: (numeroId) => gerenciador.estado(numeroId)?.numero ?? null,
+  pausado,
   log,
-  conectadoDesde: (numeroId) => {
-    const e = gerenciador.estado(numeroId)
-    return e?.status === 'conectado' ? e.desde : null
-  },
+  aoEnfileirar: (numeroId) => gerenciador.acordar(numeroId),
+  aoMudarSilencio: () => void agenda.rodar()
+})
+
+const agenda = new AgendaGrupos({
+  repo,
+  grupos,
+  bots: botsGrupos,
+  conexao: (numeroId) => gerenciador.conexao(numeroId),
+  pausado,
+  log,
   aoEnfileirar: (numeroId) => gerenciador.acordar(numeroId)
 })
 
@@ -87,7 +100,7 @@ const gerenciador: GerenciadorConexoes<ConexaoBaileys> = new GerenciadorConexoes
     log: log.child({ numero: n.id }),
     janelaMs: amb.janelaMs,
     aoReceber: (m) => orquestrador.receber(m),
-    aoComando: (m) => orquestradorGrupos.receber(m),
+    aoMensagemGrupos: (m) => orquestradorGrupos.receber(m),
     aoEventoGrupos: (e) => orquestradorGrupos.eventoGrupos(n.id, e),
     aoMudarEstado: (e) => {
       vigia.verificar(e)
@@ -96,13 +109,14 @@ const gerenciador: GerenciadorConexoes<ConexaoBaileys> = new GerenciadorConexoes
   })
   const expedidor =
     n.papel === 'grupos'
-      ? new ExpedidorGrupos({ numeroId: n.id, grupos, conexao, log })
-      : new Expedidor({ numeroId: n.id, repo, conexao, log, janelaMs: amb.janelaMs })
+      ? new ExpedidorGrupos({ numeroId: n.id, grupos, armazem, conexao, log, pausado: () => pausado(n.id) })
+      : new Expedidor({ numeroId: n.id, repo, conexao, log, janelaMs: amb.janelaMs, pausado: () => pausado(n.id) })
   return { conexao, expedidor }
 }, log)
 
 orquestrador.retomarPendentes()
 await gerenciador.iniciarTodos(numeros.listar())
+agenda.iniciar()
 
 const timers: NodeJS.Timeout[] = [
   setInterval(() => orquestrador.verificarFinalizacoes(), 5_000),
@@ -142,13 +156,13 @@ const painel = await criarPainel({
   numeros,
   grupos,
   botsGrupos,
-  sincronizarGrupo: (botId, jid) => orquestradorGrupos.sincronizarGrupo(botId, jid),
   bots: config,
   armazem,
   log,
   conexoes: {
     estado: (id) => gerenciador.estado(id),
     novaSessao: (id) => gerenciador.novaSessao(id),
+    revogar: (id) => gerenciador.revogar(id),
     ativar: (n) => gerenciador.adicionar(n),
     desativar: async (id) => {
       await gerenciador.parar(id)
@@ -172,6 +186,7 @@ async function desligar(sinal: string): Promise<void> {
   // Primeiro para de enviar (nenhum envio novo começa), depois de aceitar pedidos do
   // painel; só então espera os orquestradores e fecha as conexões e o banco.
   for (const t of timers) clearInterval(t)
+  agenda.parar()
   gerenciador.pararExpedidores()
   await painel.close()
   await orquestrador.ocioso()

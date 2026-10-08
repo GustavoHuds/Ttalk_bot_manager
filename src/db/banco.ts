@@ -302,6 +302,63 @@ export const MIGRACOES: string[] = [
   ALTER TABLE grupos DROP COLUMN loja;
   ALTER TABLE auditoria ADD COLUMN funcionario_id INTEGER;
   CREATE INDEX auditoria_funcionario ON auditoria (funcionario_id) WHERE funcionario_id IS NOT NULL;
+  `,
+  `
+  -- Pausado: o número continua conectado, mas o bot não lê nem envia nada.
+  ALTER TABLE numeros ADD COLUMN pausado INTEGER NOT NULL DEFAULT 0;
+
+  -- /banword: mensagem com uma destas palavras é apagada (o bot precisa ser admin).
+  CREATE TABLE palavras_proibidas (
+    bot_id INTEGER NOT NULL,
+    jid TEXT NOT NULL,
+    palavra TEXT NOT NULL,
+    PRIMARY KEY (bot_id, jid, palavra),
+    FOREIGN KEY (bot_id, jid) REFERENCES grupos_ativos (bot_id, jid) ON DELETE CASCADE
+  );
+
+  -- /mutegroup: grupo fechado (só admins falam). Sem horário = até o /unmute; com horário = todo dia.
+  CREATE TABLE silencios (
+    bot_id INTEGER NOT NULL,
+    jid TEXT NOT NULL,
+    inicio TEXT,
+    fim TEXT,
+    -- O que o bot aplicou por último no WhatsApp: 1 fechado, 0 aberto, NULL nada ainda.
+    fechado INTEGER,
+    criado_por TEXT NOT NULL,
+    criado_em INTEGER NOT NULL,
+    PRIMARY KEY (bot_id, jid),
+    FOREIGN KEY (bot_id, jid) REFERENCES grupos_ativos (bot_id, jid) ON DELETE CASCADE
+  );
+
+  -- Mensagens programadas (painel) e repetições (/repeat). Horários no fuso de Brasília.
+  CREATE TABLE programadas (
+    id INTEGER PRIMARY KEY,
+    bot_id INTEGER NOT NULL,
+    jid TEXT NOT NULL,
+    origem TEXT NOT NULL CHECK (origem IN ('painel', 'repeat')),
+    horarios TEXT NOT NULL,
+    dias TEXT NOT NULL,
+    data TEXT,
+    variar INTEGER NOT NULL DEFAULT 0,
+    mencionar INTEGER NOT NULL DEFAULT 0,
+    ativa INTEGER NOT NULL DEFAULT 1,
+    ultimo_envio INTEGER,
+    ultima_variacao INTEGER,
+    criado_por TEXT NOT NULL,
+    criado_em INTEGER NOT NULL,
+    FOREIGN KEY (bot_id, jid) REFERENCES grupos_ativos (bot_id, jid) ON DELETE CASCADE
+  );
+  CREATE INDEX programadas_bot ON programadas (bot_id, ativa);
+  CREATE TABLE programadas_msgs (
+    programada_id INTEGER NOT NULL REFERENCES programadas (id) ON DELETE CASCADE,
+    ordem INTEGER NOT NULL,
+    texto TEXT,
+    midia TEXT,
+    midia_tipo TEXT CHECK (midia_tipo IN ('imagem', 'video', 'audio', 'documento')),
+    mimetype TEXT,
+    nome_arquivo TEXT,
+    PRIMARY KEY (programada_id, ordem)
+  );
   `
 ]
 

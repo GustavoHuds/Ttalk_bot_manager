@@ -11,6 +11,8 @@ export interface ConexaoGerida {
   iniciar(): Promise<void>
   parar(): Promise<void>
   novaSessao(): Promise<void>
+  /** Desconecta o aparelho no celular e começa uma sessão nova (novo QR). */
+  revogar(): Promise<void>
 }
 
 /** Expedidor de recrutamento ou de grupos. */
@@ -209,6 +211,14 @@ export class GerenciadorConexoes<C extends ConexaoGerida> {
       const linha = this.linhas.get(numeroId)
       if (!linha) throw new Error('número desativado')
       await linha.conexao.novaSessao()
+    })
+  }
+
+  async revogar(numeroId: number): Promise<void> {
+    return this.porNumero(numeroId, async () => {
+      const linha = this.linhas.get(numeroId)
+      if (!linha) throw new Error('número desligado')
+      await linha.conexao.revogar()
     })
   }
 
