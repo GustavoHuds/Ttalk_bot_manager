@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { NovoArquivo } from './db/repositorio.js'
 
@@ -40,6 +40,20 @@ export class ArmazemArquivos {
     await mkdir(dirname(absoluto), { recursive: true, mode: 0o700 })
     await writeFile(absoluto, dados, { mode: 0o600, flag: 'wx' })
     return { caminho, ext, mimetype, tamanho: dados.length, hash: createHash('sha256').update(dados).digest('hex') }
+  }
+
+  /** Mídia do bot de grupos (programadas, /repeat, envio pelo privado). Nome aleatório, sem conferir assinatura. */
+  async salvarMidia(ext: string, dados: Buffer): Promise<string> {
+    const limpa = /^[a-z0-9]{1,8}$/.test(ext) ? ext : 'bin'
+    const caminho = ['midias', `${randomBytes(16).toString('hex')}.${limpa}`].join('/')
+    const absoluto = this.absoluto(caminho)
+    await mkdir(dirname(absoluto), { recursive: true, mode: 0o700 })
+    await writeFile(absoluto, dados, { mode: 0o600, flag: 'wx' })
+    return caminho
+  }
+
+  ler(caminho: string): Promise<Buffer> {
+    return readFile(this.absoluto(caminho))
   }
 
   async apagar(caminho: string): Promise<void> {

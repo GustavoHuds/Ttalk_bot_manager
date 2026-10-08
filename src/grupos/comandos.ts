@@ -1,53 +1,63 @@
 import { semAcento } from '../conversa/textos.js'
 
-export type NomeComando = 'menu' | 'gestores' | 'quem' | 'cadastrar' | 'setores' | 'desconhecidos' | 'grupos' | 'gestor' | 'status' | 'log'
+export type NomeComando = 'menu' | 'grupo' | 'all' | 'todos' | 'mencionar' | 'remove' | 'banword' | 'mutegroup' | 'unmute' | 'repeat' | 'confirmar'
 
 export interface DefComando {
   nome: NomeComando
-  /** Só gestores podem usar (os outros são ignorados em silêncio). */
-  gestor: boolean
-  onde: 'grupo' | 'privado' | 'ambos'
   uso: string
   descricao: string
+  /** Não pode ser desligado no painel. */
+  fixo?: true
+  /** Fora do /menu e da lista do painel. */
+  oculto?: true
+  /** Só no privado com o bot. */
+  soPrivado?: true
+  /** Age num grupo: no grupo, nele mesmo; no privado, no grupo escolhido. */
+  precisaGrupo?: true
   /** Precisa da lista de participantes do grupo. */
   precisaMembros?: true
-  /** Precisa que o bot seja admin do grupo (nenhum nesta entrega; usado a partir dos avisos). */
+  /** Precisa que o número do bot seja admin do grupo. */
   precisaAdmin?: true
 }
 
-/** Tabela única: permissões, onde vale, texto do /menu. O motor e o orquestrador leem daqui. */
+/**
+ * Tabela única dos comandos. Todos são de gestores (quem não é gestor confirmado não recebe resposta),
+ * menos o /confirmar, que é como alguém indicado vira gestor. Todos valem no grupo e no privado: no
+ * privado, o bot pergunta em qual grupo agir (numerado) e lembra a escolha por um tempo.
+ */
 export const COMANDOS: DefComando[] = [
-  { nome: 'menu', gestor: false, onde: 'ambos', uso: '/menu', descricao: 'mostra os comandos' },
-  { nome: 'gestores', gestor: false, onde: 'grupo', uso: '/gestores', descricao: 'chama os gestores deste grupo', precisaMembros: true },
-  { nome: 'quem', gestor: false, onde: 'grupo', uso: '/quem @pessoa', descricao: 'nome, setor e loja de alguém' },
-  {
-    nome: 'cadastrar',
-    gestor: true,
-    onde: 'ambos',
-    uso: '/cadastrar @pessoa Nome | Setor | Loja | Cargo',
-    descricao: 'cadastra ou atualiza alguém (cargo é opcional; no privado use o telefone no lugar do @)'
-  },
-  { nome: 'setores', gestor: true, onde: 'ambos', uso: '/setores', descricao: 'setores e lojas com o número de pessoas' },
-  { nome: 'desconhecidos', gestor: true, onde: 'grupo', uso: '/desconhecidos', descricao: 'quem está no grupo sem cadastro', precisaMembros: true },
-  { nome: 'grupos', gestor: true, onde: 'privado', uso: '/grupos', descricao: 'grupos deste número' },
-  { nome: 'gestor', gestor: true, onde: 'ambos', uso: '/gestor add @pessoa  ·  /gestor remover @pessoa', descricao: 'dá ou tira o poder de gestor' },
-  { nome: 'status', gestor: true, onde: 'ambos', uso: '/status', descricao: 'situação do bot' },
-  { nome: 'log', gestor: true, onde: 'privado', uso: '/log 10', descricao: 'últimas ações registradas (até 30)' }
+  { nome: 'menu', uso: '/menu', descricao: 'lista os comandos', fixo: true },
+  { nome: 'grupo', uso: '/grupo', descricao: 'escolhe em qual grupo agir', fixo: true, soPrivado: true },
+  { nome: 'all', uso: '/all mensagem', descricao: 'manda a mensagem mencionando todos, sem mostrar as menções', precisaGrupo: true, precisaMembros: true },
+  { nome: 'todos', uso: '/todos mensagem', descricao: 'manda a mensagem com todos mencionados no texto', precisaGrupo: true, precisaMembros: true },
+  { nome: 'mencionar', uso: '/mencionar mensagem @pessoa', descricao: 'manda a mensagem mencionando a pessoa em segredo', precisaGrupo: true, precisaMembros: true },
+  { nome: 'remove', uso: '/remove @pessoa @pessoa', descricao: 'remove participantes do grupo', precisaGrupo: true, precisaMembros: true, precisaAdmin: true },
+  { nome: 'banword', uso: '/banword palavra,outra', descricao: 'apaga mensagens com essas palavras', precisaGrupo: true, precisaAdmin: true },
+  { nome: 'mutegroup', uso: '/mutegroup 22:00/06:00', descricao: 'fecha o grupo (sem horário: até o /unmute)', precisaGrupo: true, precisaAdmin: true },
+  { nome: 'unmute', uso: '/unmute', descricao: 'abre o grupo', precisaGrupo: true, precisaAdmin: true },
+  { nome: 'repeat', uso: '/repeat 08:00 18:00', descricao: 'repete a mensagem citada nos horários (/repeat stop para parar)', precisaGrupo: true },
+  { nome: 'confirmar', uso: '/confirmar 123456', descricao: 'confirma você como gestor(a)', fixo: true, oculto: true, soPrivado: true }
 ]
 
-const APELIDOS: Record<string, NomeComando> = { ajuda: 'menu', help: 'menu', comandos: 'menu' }
+export const APELIDOS: Record<string, NomeComando> = {
+  ajuda: 'menu',
+  help: 'menu',
+  comandos: 'menu',
+  grupos: 'grupo',
+  remover: 'remove',
+  mutar: 'mutegroup',
+  mute: 'mutegroup',
+  desmutar: 'unmute',
+  repetir: 'repeat'
+}
 
 export interface Comando {
-  /** Nome sem a barra, minúsculo e sem acento ("cadastrar"). */
+  /** Nome sem a barra, minúsculo e sem acento ("all"). */
   nome: string
   /** O resto do texto, sem as menções "@123..." e com espaços simples. */
   args: string
-  /** args separado por "|", cada parte aparada. Vazio quando não há args. */
-  campos: string[]
-  /** JIDs mencionados, na ordem. */
-  mencionados: string[]
-  /** Autor da mensagem citada. */
-  citada: string | null
+  /** O resto do texto como veio (quebras de linha mantidas), só sem as menções. */
+  bruto: string
 }
 
 /**
@@ -57,29 +67,23 @@ export interface Comando {
  */
 const PREFIXO = /^[\s​-‏﻿]*\/(\p{L}[\p{L}\p{M}\d_-]*)(?=$|[\s|@.,!?])/u
 /** Comando é coisa curta; texto enorme não é interpretado. */
-const TAMANHO_MAXIMO = 2000
+const TAMANHO_MAXIMO = 4000
 
 export function ehComando(texto: string | null | undefined): boolean {
   if (!texto || texto.length > TAMANHO_MAXIMO) return false
   return PREFIXO.test(texto.normalize('NFC'))
 }
 
-export function interpretar(texto: string, mencionados: string[] = [], citada: string | null = null): Comando | null {
+export function interpretar(texto: string): Comando | null {
   if (texto.length > TAMANHO_MAXIMO) return null
   const t = texto.normalize('NFC')
   const m = PREFIXO.exec(t)
   if (!m) return null
-  const args = t
-    .slice(m[0].length)
-    .replace(/@\d+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+  const resto = t.slice(m[0].length).replace(/@\d+/g, ' ')
   return {
     nome: semAcento(m[1]!),
-    args,
-    campos: args ? args.split('|').map((c) => c.trim()) : [],
-    mencionados,
-    citada
+    args: resto.replace(/\s+/g, ' ').trim(),
+    bruto: resto.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim()
   }
 }
 

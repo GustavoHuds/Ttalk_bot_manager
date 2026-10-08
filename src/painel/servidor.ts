@@ -6,6 +6,7 @@ import type { Logger } from 'pino'
 import type { ArmazemArquivos } from '../arquivos.js'
 import { botModelo, paraEditor, prepararBot, type FonteBots } from '../config/bots.js'
 import type { StatusProcesso } from '../config/tipos.js'
+import type { RepoBotsGrupos } from '../db/bots-grupos.js'
 import type { RepoGrupos } from '../db/grupos.js'
 import type { Numero, RepoNumeros } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
@@ -13,14 +14,16 @@ import type { EstadoConexao } from '../whatsapp/baileys.js'
 import { LimiteLogin, senhaConfere } from './auth.js'
 import { paginaEditorBot } from './editor.js'
 import { gerarZip } from './exportar.js'
-import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude } from './paginas.js'
-import { rotasEquipe } from './rotas-equipe.js'
+import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude, type ResumoBotGrupos } from './paginas.js'
+import { rotasBotGrupos } from './rotas-bot-grupos.js'
 import { rotasNumeros } from './rotas-numeros.js'
 
 /** O que o painel controla nas conexões (o GerenciadorConexoes, em produção). */
 export interface ControleConexoes {
   estado(numeroId: number): EstadoConexao | null
   novaSessao(numeroId: number): Promise<void>
+  /** Desconecta o aparelho no celular e começa uma sessão nova (QR). */
+  revogar(numeroId: number): Promise<void>
   ativar(numero: Numero): Promise<void>
   desativar(numeroId: number): Promise<void>
 }
@@ -30,6 +33,7 @@ export interface DependenciasPainel {
   bots: FonteBots
   numeros: RepoNumeros
   grupos: RepoGrupos
+  botsGrupos: RepoBotsGrupos
   armazem: ArmazemArquivos
   conexoes: ControleConexoes
   log: Logger
@@ -126,6 +130,23 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
     return atual ? [...ativos, atual] : ativos
   }
 
+  /** Bots de grupos com o que a lista da página Bots mostra. */
+  const resumoBotsGrupos = (): ResumoBotGrupos[] =>
+    d.botsGrupos.bots().map((bot) => {
+      const n = bot.numeroId ? d.numeros.numero(bot.numeroId) : null
+      const gestores = d.botsGrupos.gestores(bot.id)
+      return {
+        id: bot.id,
+        nome: bot.nome,
+        ativo: bot.ativo,
+        numero: n ? { nome: n.nome, ativo: n.ativo, pausado: n.pausado, estado: n.ativo ? d.conexoes.estado(n.id) : null } : null,
+        gruposAtivos: d.botsGrupos.gruposAtivos(bot.id).length,
+        gestoresConfirmados: gestores.filter((x) => x.confirmadoEm).length,
+        gestoresPendentes: gestores.filter((x) => !x.confirmadoEm).length,
+        programadas: d.botsGrupos.programadas(bot.id).filter((p) => p.ativa).length
+      }
+    })
+
   app.get<{ Querystring: { salvo?: string; excluido?: string } }>('/', async (req, rep) => {
     const aviso = req.query.salvo ? `Bot ${req.query.salvo} salvo.` : req.query.excluido ? `Bot ${req.query.excluido} excluído.` : null
     // Todos os números de recrutamento entram aqui (mesmo desativados), para o aviso claro de cada bot.
@@ -133,7 +154,7 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
       .listar()
       .filter((n) => n.papel === 'recrutamento')
       .map((n) => ({ id: n.id, nome: n.nome, ativo: n.ativo, telefone: n.ativo ? d.conexoes.estado(n.id)?.numero ?? null : null }))
-    return html(rep, paginaProcessos(d.bots.get(), d.repo.resumoPorProcesso(), numeros, usuario(req), agora(), aviso))
+    return html(rep, paginaProcessos(d.bots.get(), d.repo.resumoPorProcesso(), numeros, usuario(req), agora(), aviso, resumoBotsGrupos()))
   })
 
   // --- bots ---------------------------------------------------------------------------
@@ -285,8 +306,11 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
 
   app.get('/auditoria', async (req, rep) => html(rep, paginaAuditoria(d.repo.auditoriaRecente(200), usuario(req))))
 
+  // Endereços de antes da reorganização: grupos ficam dentro de cada bot; não há mais cadastro geral.
+  for (const antigo of ['/grupos', '/equipe', '/equipe/*']) app.get(antigo, async (_req, rep) => rep.redirect('/', 303))
+
   rotasNumeros(app, d, { html, usuario, agora })
-  rotasEquipe(app, d, { html, usuario, agora })
+  rotasBotGrupos(app, d, { html, usuario, agora })
 
   return app
 }

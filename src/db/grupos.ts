@@ -5,29 +5,25 @@ export interface Grupo {
   jid: string
   nome: string
   botAdmin: boolean
-  setor: string | null
-  loja: string | null
-  /** false quando o bot saiu ou foi removido do grupo. */
+  /** false quando o número saiu ou foi removido do grupo. */
   ativo: boolean
   atualizadoEm: number
 }
 
+/** Pessoa do cadastro de gestores (o mesmo cadastro serve a todos os bots de grupos). */
 export interface DadosFuncionario {
   nome: string
   /** Chave do telefone: brasileiro canônico (55+DDD+número com o 9) ou dígitos com DDI para outros países. */
   telefone: string | null
   /** JID @lid, quando o WhatsApp esconde o número. Só o WhatsApp o informa. */
   lid: string | null
-  setor: string | null
-  loja: string | null
-  cargo: string | null
-  /** AAAA-MM-DD */
-  nascimento: string | null
   ativo: boolean
 }
 
 export interface Funcionario extends DadosFuncionario {
   id: number
+  /** Quando a pessoa provou, por código no privado de um bot, que este WhatsApp é dela. */
+  confirmadoEm: number | null
 }
 
 export interface ItemSaidaGrupo {
@@ -44,8 +40,6 @@ interface LinhaGrupo {
   jid: string
   nome: string
   bot_admin: number
-  setor: string | null
-  loja: string | null
   ativo: number
   atualizado_em: number
 }
@@ -55,11 +49,8 @@ interface LinhaFuncionario {
   nome: string
   telefone: string | null
   lid: string | null
-  setor: string | null
-  loja: string | null
-  cargo: string | null
-  nascimento: string | null
   ativo: number
+  confirmado_em: number | null
 }
 
 const grupoDe = (l: LinhaGrupo): Grupo => ({
@@ -67,8 +58,6 @@ const grupoDe = (l: LinhaGrupo): Grupo => ({
   jid: l.jid,
   nome: l.nome,
   botAdmin: l.bot_admin === 1,
-  setor: l.setor,
-  loja: l.loja,
   ativo: l.ativo === 1,
   atualizadoEm: l.atualizado_em
 })
@@ -78,17 +67,14 @@ const funcionarioDe = (l: LinhaFuncionario): Funcionario => ({
   nome: l.nome,
   telefone: l.telefone,
   lid: l.lid,
-  setor: l.setor,
-  loja: l.loja,
-  cargo: l.cargo,
-  nascimento: l.nascimento,
-  ativo: l.ativo === 1
+  ativo: l.ativo === 1,
+  confirmadoEm: l.confirmado_em
 })
 
-const COLUNAS_FUNCIONARIO = `id, nome, telefone, lid, setor, loja, cargo, nascimento, ativo`
-const COLUNAS_GRUPO = `numero_id, jid, nome, bot_admin, setor, loja, ativo, atualizado_em`
+const COLUNAS_FUNCIONARIO = `id, nome, telefone, lid, ativo, confirmado_em`
+const COLUNAS_GRUPO = `numero_id, jid, nome, bot_admin, ativo, atualizado_em`
 
-/** Grupos, equipe, gestores e caixa de saída do bot de grupos. Usa o mesmo banco (e as mesmas transações) do Repositorio. */
+/** Grupos de cada número (lista geral), cadastro de gestores e caixa de saída do bot de grupos. Usa o mesmo banco (e as mesmas transações) do Repositorio. */
 export class RepoGrupos {
   constructor(private readonly db: Banco) {}
 
@@ -119,7 +105,7 @@ export class RepoGrupos {
     return l ? grupoDe(l) : null
   }
 
-  /** Bot entrou ou o grupo foi relido: grava nome e admin, sem mexer nas etiquetas de setor e loja. */
+  /** Número entrou ou o grupo foi relido: grava nome e admin. */
   salvarGrupo(numeroId: number, jid: string, nome: string, botAdmin: boolean, agora: number): void {
     this.db
       .prepare(
@@ -157,14 +143,7 @@ export class RepoGrupos {
     return sairam.length
   }
 
-  etiquetarGrupo(numeroId: number, jid: string, setor: string | null, loja: string | null, agora: number): boolean {
-    const r = this.db
-      .prepare(`UPDATE grupos SET setor = ?, loja = ?, atualizado_em = ? WHERE numero_id = ? AND jid = ?`)
-      .run(setor, loja, agora, numeroId, jid)
-    return r.changes === 1
-  }
-
-  // --- equipe ---------------------------------------------------------------------
+  // --- cadastro de gestores ---------------------------------------------------------------------
 
   funcionarios(): Funcionario[] {
     return (
@@ -189,23 +168,17 @@ export class RepoGrupos {
    * Lança erro também se `id` não existir.
    */
   salvarFuncionario(id: number | null, d: DadosFuncionario, agora: number): number {
-    const valores = [d.nome, d.telefone, d.lid, d.setor, d.loja, d.cargo, d.nascimento, d.ativo ? 1 : 0]
+    const valores = [d.nome, d.telefone, d.lid, d.ativo ? 1 : 0]
     if (id === null) {
       const r = this.db
-        .prepare(
-          `INSERT INTO funcionarios (nome, telefone, lid, setor, loja, cargo, nascimento, ativo, criado_em, atualizado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
+        .prepare(`INSERT INTO funcionarios (nome, telefone, lid, ativo, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(...valores, agora, agora)
       return Number(r.lastInsertRowid)
     }
     const r = this.db
-      .prepare(
-        `UPDATE funcionarios SET nome = ?, telefone = ?, lid = ?, setor = ?, loja = ?, cargo = ?, nascimento = ?, ativo = ?,
-           atualizado_em = ? WHERE id = ?`
-      )
+      .prepare(`UPDATE funcionarios SET nome = ?, telefone = ?, lid = ?, ativo = ?, atualizado_em = ? WHERE id = ?`)
       .run(...valores, agora, id)
-    if (r.changes !== 1) throw new Error('funcionário não encontrado')
+    if (r.changes !== 1) throw new Error('pessoa não encontrada')
     return id
   }
 
@@ -214,27 +187,27 @@ export class RepoGrupos {
     this.db.prepare(`UPDATE funcionarios SET lid = ?, atualizado_em = ? WHERE id = ? AND lid IS NULL`).run(lid, agora, id)
   }
 
+  /** Correção feita pelo painel (divergência aceita) ou telefone que faltava, visto na confirmação. */
+  definirTelefone(id: number, telefone: string, agora: number): void {
+    this.db.prepare(`UPDATE funcionarios SET telefone = ?, atualizado_em = ? WHERE id = ?`).run(telefone, agora, id)
+  }
+
+  /** Ao contrário de vincularLid, troca um LID já gravado: só a confirmação por código pode fazer isso. */
+  definirLid(id: number, lid: string, agora: number): void {
+    this.db.prepare(`UPDATE funcionarios SET lid = ?, atualizado_em = ? WHERE id = ?`).run(lid, agora, id)
+  }
+
+  confirmarFuncionario(id: number, agora: number): void {
+    this.db.prepare(`UPDATE funcionarios SET confirmado_em = ?, atualizado_em = ? WHERE id = ?`).run(agora, agora, id)
+  }
+
+  /** O telefone mudou pelo painel: a confirmação antiga não prova mais nada sobre o número novo. */
+  desconfirmarFuncionario(id: number, agora: number): void {
+    this.db.prepare(`UPDATE funcionarios SET confirmado_em = NULL, atualizado_em = ? WHERE id = ?`).run(agora, id)
+  }
+
   excluirFuncionario(id: number): boolean {
     return this.db.prepare(`DELETE FROM funcionarios WHERE id = ?`).run(id).changes === 1
-  }
-
-  // --- gestores -------------------------------------------------------------------
-
-  /** IDs de funcionário com poder de gestor. */
-  gestores(): number[] {
-    return (this.db.prepare(`SELECT funcionario_id AS id FROM gestores ORDER BY adicionado_em, funcionario_id`).all() as { id: number }[]).map(
-      (r) => r.id
-    )
-  }
-
-  adicionarGestor(funcionarioId: number, por: string, agora: number): void {
-    this.db
-      .prepare(`INSERT OR IGNORE INTO gestores (funcionario_id, adicionado_por, adicionado_em) VALUES (?, ?, ?)`)
-      .run(funcionarioId, por, agora)
-  }
-
-  removerGestor(funcionarioId: number): void {
-    this.db.prepare(`DELETE FROM gestores WHERE funcionario_id = ?`).run(funcionarioId)
   }
 
   // --- caixa de entrada: só o ID do comando, para descartar repetidas -------------
@@ -255,8 +228,15 @@ export class RepoGrupos {
 
   // --- caixa de saída -------------------------------------------------------------
 
-  enfileirarSaida(numeroId: number, jid: string, conteudo: string, agora: number): void {
-    this.db.prepare(`INSERT INTO saida_grupos (numero_id, jid, conteudo, criada_em) VALUES (?, ?, ?, ?)`).run(numeroId, jid, conteudo, agora)
+  /** `proximaEm` atrasa a saída (espalha envios programados no tempo, em vez de todos no mesmo segundo). */
+  enfileirarSaida(numeroId: number, jid: string, conteudo: string, agora: number, proximaEm = 0): void {
+    this.db
+      .prepare(`INSERT INTO saida_grupos (numero_id, jid, conteudo, criada_em, proxima_em) VALUES (?, ?, ?, ?, ?)`)
+      .run(numeroId, jid, conteudo, agora, proximaEm)
+  }
+
+  saidasPendentes(numeroId: number): number {
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM saida_grupos WHERE numero_id = ?`).get(numeroId) as { n: number }).n
   }
 
   /** Só o jid cuja mensagem mais antiga (a próxima a sair) já está pronta: uma com reenvio agendado segura as de trás. */

@@ -405,8 +405,17 @@ export class Repositorio {
     return r ?? null
   }
 
-  auditar(usuario: string, acao: string, detalhe: string | null, agora: number): void {
-    this.db.prepare(`INSERT INTO auditoria (em, usuario, acao, detalhe) VALUES (?, ?, ?, ?)`).run(agora, usuario, acao, detalhe)
+  /** `funcionarioId` liga a linha a uma pessoa da equipe (histórico na página dela). */
+  auditar(usuario: string, acao: string, detalhe: string | null, agora: number, funcionarioId: number | null = null): void {
+    this.db
+      .prepare(`INSERT INTO auditoria (em, usuario, acao, detalhe, funcionario_id) VALUES (?, ?, ?, ?, ?)`)
+      .run(agora, usuario, acao, detalhe, funcionarioId)
+  }
+
+  auditoriaDaPessoa(funcionarioId: number, limite = 30): { em: number; usuario: string; acao: string; detalhe: string | null }[] {
+    return this.db
+      .prepare(`SELECT em, usuario, acao, detalhe FROM auditoria WHERE funcionario_id = ? ORDER BY id DESC LIMIT ?`)
+      .all(funcionarioId, limite) as { em: number; usuario: string; acao: string; detalhe: string | null }[]
   }
 
   auditoriaRecente(limite = 100): { em: number; usuario: string; acao: string; detalhe: string | null }[] {

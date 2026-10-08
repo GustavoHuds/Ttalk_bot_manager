@@ -216,6 +216,149 @@ export const MIGRACOES: string[] = [
   );
   CREATE INDEX saida_grupos_numero ON saida_grupos (numero_id, proxima_em);
   CREATE INDEX saida_grupos_jid ON saida_grupos (numero_id, jid);
+  `,
+  `
+  -- Bot de grupos vira uma entidade própria, separada do número: trocar o chip mantém lojas, comandos,
+  -- gestores e grupos ativos (o JID de um grupo não muda com o número). Um número atende um bot só.
+  CREATE TABLE bots_grupos (
+    id INTEGER PRIMARY KEY,
+    nome TEXT NOT NULL,
+    numero_id INTEGER UNIQUE REFERENCES numeros (id),
+    ativo INTEGER NOT NULL DEFAULT 1,
+    criado_em INTEGER NOT NULL
+  );
+  INSERT INTO bots_grupos (nome, numero_id, ativo, criado_em)
+    SELECT nome, id, 1, criado_em FROM numeros WHERE papel = 'grupos' ORDER BY id;
+
+  CREATE TABLE lojas (
+    id INTEGER PRIMARY KEY,
+    bot_id INTEGER NOT NULL REFERENCES bots_grupos (id) ON DELETE CASCADE,
+    nome TEXT NOT NULL COLLATE NOCASE,
+    UNIQUE (bot_id, nome)
+  );
+
+  -- Só aqui o bot atua. Grupo fora desta tabela: o bot fica em silêncio e nada é guardado.
+  CREATE TABLE grupos_ativos (
+    bot_id INTEGER NOT NULL REFERENCES bots_grupos (id) ON DELETE CASCADE,
+    jid TEXT NOT NULL,
+    loja_id INTEGER REFERENCES lojas (id) ON DELETE SET NULL,
+    setor TEXT,
+    ativado_em INTEGER NOT NULL,
+    ativado_por TEXT NOT NULL,
+    PRIMARY KEY (bot_id, jid)
+  );
+
+  -- Participantes só dos grupos ativos (sem nome, sem mensagem): somem quando o grupo é desativado.
+  CREATE TABLE participantes (
+    bot_id INTEGER NOT NULL,
+    grupo_jid TEXT NOT NULL,
+    jid TEXT NOT NULL,
+    telefone TEXT,
+    lid TEXT,
+    admin INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (bot_id, grupo_jid, jid),
+    FOREIGN KEY (bot_id, grupo_jid) REFERENCES grupos_ativos (bot_id, jid) ON DELETE CASCADE
+  );
+  CREATE INDEX participantes_telefone ON participantes (telefone);
+  CREATE INDEX participantes_lid ON participantes (lid);
+
+  -- Gestores por bot. Só têm poder depois de confirmar pelo código no privado do bot.
+  CREATE TABLE gestores_bot (
+    bot_id INTEGER NOT NULL REFERENCES bots_grupos (id) ON DELETE CASCADE,
+    funcionario_id INTEGER NOT NULL REFERENCES funcionarios (id) ON DELETE CASCADE,
+    codigo TEXT,
+    codigo_expira_em INTEGER,
+    confirmado_em INTEGER,
+    confirmado_jid TEXT,
+    divergente_jid TEXT,
+    divergente_telefone TEXT,
+    divergente_em INTEGER,
+    adicionado_por TEXT NOT NULL,
+    adicionado_em INTEGER NOT NULL,
+    PRIMARY KEY (bot_id, funcionario_id)
+  );
+  CREATE UNIQUE INDEX gestores_bot_codigo ON gestores_bot (bot_id, codigo) WHERE codigo IS NOT NULL;
+  INSERT INTO gestores_bot (bot_id, funcionario_id, adicionado_por, adicionado_em)
+    SELECT (SELECT MIN(id) FROM bots_grupos), funcionario_id, adicionado_por, adicionado_em
+    FROM gestores WHERE (SELECT MIN(id) FROM bots_grupos) IS NOT NULL;
+  DROP TABLE gestores;
+
+  -- Ajustes dos comandos prontos (ligado, textos editados) e comandos personalizados de cada bot.
+  CREATE TABLE comandos_bot (
+    bot_id INTEGER NOT NULL REFERENCES bots_grupos (id) ON DELETE CASCADE,
+    nome TEXT NOT NULL,
+    ligado INTEGER NOT NULL DEFAULT 1,
+    personalizado INTEGER NOT NULL DEFAULT 0,
+    quem TEXT CHECK (quem IN ('todos', 'gestores')),
+    onde TEXT CHECK (onde IN ('grupo', 'privado', 'ambos')),
+    descricao TEXT,
+    resposta TEXT,
+    textos TEXT,
+    PRIMARY KEY (bot_id, nome)
+  );
+
+  ALTER TABLE funcionarios ADD COLUMN confirmado_em INTEGER;
+  ALTER TABLE grupos DROP COLUMN setor;
+  ALTER TABLE grupos DROP COLUMN loja;
+  ALTER TABLE auditoria ADD COLUMN funcionario_id INTEGER;
+  CREATE INDEX auditoria_funcionario ON auditoria (funcionario_id) WHERE funcionario_id IS NOT NULL;
+  `,
+  `
+  -- Pausado: o número continua conectado, mas o bot não lê nem envia nada.
+  ALTER TABLE numeros ADD COLUMN pausado INTEGER NOT NULL DEFAULT 0;
+
+  -- /banword: mensagem com uma destas palavras é apagada (o bot precisa ser admin).
+  CREATE TABLE palavras_proibidas (
+    bot_id INTEGER NOT NULL,
+    jid TEXT NOT NULL,
+    palavra TEXT NOT NULL,
+    PRIMARY KEY (bot_id, jid, palavra),
+    FOREIGN KEY (bot_id, jid) REFERENCES grupos_ativos (bot_id, jid) ON DELETE CASCADE
+  );
+
+  -- /mutegroup: grupo fechado (só admins falam). Sem horário = até o /unmute; com horário = todo dia.
+  CREATE TABLE silencios (
+    bot_id INTEGER NOT NULL,
+    jid TEXT NOT NULL,
+    inicio TEXT,
+    fim TEXT,
+    -- O que o bot aplicou por último no WhatsApp: 1 fechado, 0 aberto, NULL nada ainda.
+    fechado INTEGER,
+    criado_por TEXT NOT NULL,
+    criado_em INTEGER NOT NULL,
+    PRIMARY KEY (bot_id, jid),
+    FOREIGN KEY (bot_id, jid) REFERENCES grupos_ativos (bot_id, jid) ON DELETE CASCADE
+  );
+
+  -- Mensagens programadas (painel) e repetições (/repeat). Horários no fuso de Brasília.
+  CREATE TABLE programadas (
+    id INTEGER PRIMARY KEY,
+    bot_id INTEGER NOT NULL,
+    jid TEXT NOT NULL,
+    origem TEXT NOT NULL CHECK (origem IN ('painel', 'repeat')),
+    horarios TEXT NOT NULL,
+    dias TEXT NOT NULL,
+    data TEXT,
+    variar INTEGER NOT NULL DEFAULT 0,
+    mencionar INTEGER NOT NULL DEFAULT 0,
+    ativa INTEGER NOT NULL DEFAULT 1,
+    ultimo_envio INTEGER,
+    ultima_variacao INTEGER,
+    criado_por TEXT NOT NULL,
+    criado_em INTEGER NOT NULL,
+    FOREIGN KEY (bot_id, jid) REFERENCES grupos_ativos (bot_id, jid) ON DELETE CASCADE
+  );
+  CREATE INDEX programadas_bot ON programadas (bot_id, ativa);
+  CREATE TABLE programadas_msgs (
+    programada_id INTEGER NOT NULL REFERENCES programadas (id) ON DELETE CASCADE,
+    ordem INTEGER NOT NULL,
+    texto TEXT,
+    midia TEXT,
+    midia_tipo TEXT CHECK (midia_tipo IN ('imagem', 'video', 'audio', 'documento')),
+    mimetype TEXT,
+    nome_arquivo TEXT,
+    PRIMARY KEY (programada_id, ordem)
+  );
   `
 ]
 

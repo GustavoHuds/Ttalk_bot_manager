@@ -9,10 +9,6 @@ const ANA: DadosFuncionario = {
   nome: 'Ana Souza',
   telefone: '5583999990001',
   lid: null,
-  setor: 'Vendas',
-  loja: 'Centro',
-  cargo: 'Gerente',
-  nascimento: null,
   ativo: true
 }
 
@@ -28,32 +24,34 @@ describe('repositório do bot de grupos', () => {
     g = new RepoGrupos(repo.db)
   })
 
-  it('grupo relido mantém as etiquetas; o que sumiu da lista fica inativo', () => {
+  it('grupo relido atualiza nome e admin; o que sumiu da lista fica inativo', () => {
     g.salvarGrupo(N, 'a@g.us', 'Loja Centro', false, AGORA)
     g.salvarGrupo(N, 'b@g.us', 'Loja Sul', true, AGORA)
-    expect(g.etiquetarGrupo(N, 'a@g.us', 'Vendas', 'Centro', AGORA)).toBe(true)
     g.salvarGrupo(N, 'a@g.us', 'Loja Centro (novo)', true, AGORA + 1)
-    expect(g.grupo(N, 'a@g.us')).toMatchObject({ nome: 'Loja Centro (novo)', botAdmin: true, setor: 'Vendas', loja: 'Centro', ativo: true })
+    expect(g.grupo(N, 'a@g.us')).toMatchObject({ nome: 'Loja Centro (novo)', botAdmin: true, ativo: true })
     expect(g.desativarAusentes(N, ['a@g.us'], AGORA + 2)).toBe(1)
     expect(g.grupos(N).map((x) => x.jid)).toEqual(['a@g.us'])
     expect(g.grupo(N, 'b@g.us')).toMatchObject({ ativo: false, botAdmin: false })
     expect(g.todosGrupos()).toHaveLength(2)
   })
 
-  it('funcionário: telefone é único, LID só é gravado uma vez, gestor sai junto com o cadastro', () => {
+  it('funcionário: telefone é único, LID só é vinculado uma vez, confirmação sobrevive à edição', () => {
     const id = g.salvarFuncionario(null, ANA, AGORA)
     expect(g.porTelefone('5583999990001')!.id).toBe(id)
     expect(() => g.salvarFuncionario(null, { ...ANA, nome: 'Outra' }, AGORA)).toThrow()
     g.vincularLid(id, '111@lid', AGORA)
     g.vincularLid(id, '222@lid', AGORA)
     expect(g.funcionario(id)!.lid).toBe('111@lid')
-    g.salvarFuncionario(id, { ...ANA, cargo: null, ativo: false, lid: '111@lid' }, AGORA)
-    expect(g.funcionario(id)).toMatchObject({ cargo: null, ativo: false })
-    g.adicionarGestor(id, 'painel:rh', AGORA)
-    g.adicionarGestor(id, 'painel:rh', AGORA)
-    expect(g.gestores()).toEqual([id])
+    g.salvarFuncionario(id, { ...ANA, nome: 'Ana S.', ativo: false, lid: '111@lid' }, AGORA)
+    expect(g.funcionario(id)).toMatchObject({ nome: 'Ana S.', ativo: false })
+    expect(g.funcionario(id)!.confirmadoEm).toBeNull()
+    g.confirmarFuncionario(id, AGORA + 5)
+    g.salvarFuncionario(id, { ...ANA, ativo: false, lid: '111@lid' }, AGORA + 6)
+    expect(g.funcionario(id)!.confirmadoEm).toBe(AGORA + 5)
+    g.definirTelefone(id, '5583988887777', AGORA)
+    g.definirLid(id, '333@lid', AGORA)
+    expect(g.funcionario(id)).toMatchObject({ telefone: '5583988887777', lid: '333@lid' })
     expect(g.excluirFuncionario(id)).toBe(true)
-    expect(g.gestores()).toEqual([])
   })
 
   it('comando: a mesma mensagem só é registrada uma vez por número', () => {
@@ -89,7 +87,7 @@ describe('repositório do bot de grupos', () => {
   })
 
   it('salvarFuncionario com id inexistente lança erro', () => {
-    expect(() => g.salvarFuncionario(999, ANA, AGORA)).toThrow('funcionário não encontrado')
+    expect(() => g.salvarFuncionario(999, ANA, AGORA)).toThrow('pessoa não encontrada')
   })
 
   it('enfileirarSaida com número inexistente lança erro (FK)', () => {

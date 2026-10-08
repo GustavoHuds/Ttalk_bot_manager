@@ -1,12 +1,12 @@
 import type { Logger } from 'pino'
 import type { Envio } from '../conversa/orquestrador.js'
 import type { Repositorio } from '../db/repositorio.js'
-import { LimitePorMinuto } from './limite.js'
+import { LimitePorMinuto, duracaoDigitando, sortear } from './limite.js'
 
 /** O que o expedidor precisa de uma conexão de WhatsApp (Baileys hoje, outra amanhã). */
 export interface ConexaoEnvio {
   pronta(): boolean
-  digitando(jid: string): Promise<void>
+  presenca(jid: string, estado: 'composing' | 'paused'): Promise<void>
   enviarTexto(jid: string, texto: string): Promise<void>
   enviarEnquete(jid: string, chave: string, pergunta: string, opcoes: string[]): Promise<void>
 }
@@ -18,22 +18,23 @@ export interface OpcoesExpedidor {
   log: Logger
   /** Só responde se o contato escreveu dentro desta janela. */
   janelaMs: number
+  /** Intervalo mínimo entre mensagens da mesma conversa; o real é sorteado entre ele e o dobro. */
   intervaloPorConversaMs?: number
   limitePorMinuto?: number
+  limitePorHora?: number
+  /** Pausado: nada sai (o número continua conectado). */
+  pausado?: () => boolean
   relogio?: () => number
   esperar?: (ms: number) => Promise<void>
+  aleatorio?: () => number
 }
 
 const MAX_TENTATIVAS = 5
 
-/** "Digitando..." proporcional ao texto, entre 1 e 4 segundos. */
-export function duracaoDigitando(texto: string): number {
-  return Math.min(4000, Math.max(1000, texto.length * 35))
-}
-
 /**
- * Esvazia a caixa de saída imitando um atendente: marca "digitando", respeita
- * 1,5 s entre mensagens da mesma conversa e no máximo 20 envios por minuto por número.
+ * Esvazia a caixa de saída imitando um atendente: marca "digitando" pelo tempo que o texto levaria
+ * para ser digitado (sorteado), para de digitar, envia; entre mensagens da mesma conversa espera de
+ * 1,5 a 3 s (sorteado); no máximo 20 envios por minuto e 300 por hora por número.
  */
 export class Expedidor {
   private ativos = new Set<string>()
@@ -44,12 +45,21 @@ export class Expedidor {
   private readonly esperar: (ms: number) => Promise<void>
   private readonly intervalo: number
   private readonly limite: LimitePorMinuto
+  private readonly limiteHora: LimitePorMinuto
+  private readonly aleatorio: () => number
 
   constructor(private readonly o: OpcoesExpedidor) {
     this.relogio = o.relogio ?? Date.now
     this.esperar = o.esperar ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
+    this.aleatorio = o.aleatorio ?? Math.random
     this.intervalo = o.intervaloPorConversaMs ?? 1500
     this.limite = new LimitePorMinuto(o.limitePorMinuto ?? 20, this.relogio, this.esperar)
+    this.limiteHora = new LimitePorMinuto(o.limitePorHora ?? 300, this.relogio, this.esperar, 60 * 60_000)
+  }
+
+  /** Parado, pausado ou sem conexão: nada sai agora. */
+  private travado(): boolean {
+    return this.parado || !!this.o.pausado?.() || !this.o.conexao.pronta()
   }
 
   iniciar(): void {
@@ -69,7 +79,7 @@ export class Expedidor {
   /** Começa a drenar as conversas com mensagens prontas. Nunca rejeita. */
   async acordar(): Promise<void> {
     try {
-      if (this.parado || !this.o.conexao.pronta()) return
+      if (this.travado()) return
       const novas = this.o.repo.jidsComSaida(this.o.numeroId, this.relogio()).filter((j) => !this.ativos.has(j))
       await Promise.all(novas.map((jid) => this.drenar(jid)))
     } catch (err) {
@@ -81,7 +91,7 @@ export class Expedidor {
     this.ativos.add(jid)
     try {
       for (;;) {
-        if (this.parado || !this.o.conexao.pronta()) return
+        if (this.travado()) return
         const item = this.o.repo.proximaSaida(this.o.numeroId, jid)
         if (!item || item.proximaEm > this.relogio()) return
 
@@ -93,15 +103,17 @@ export class Expedidor {
           continue
         }
 
+        await this.limiteHora.reservar()
         await this.limite.reservar()
         // A espera pela vaga pode ser longa; se a conexão caiu nesse meio-tempo, não envia.
-        if (this.parado || !this.o.conexao.pronta()) return
+        if (this.travado()) return
         try {
           const envio = JSON.parse(item.conteudo) as Envio
-          await this.o.conexao.digitando(jid)
-          await this.esperar(duracaoDigitando(envio.tipo === 'texto' ? envio.texto : envio.pergunta))
-          const falta = (this.ultimoPorJid.get(jid) ?? 0) + this.intervalo - this.relogio()
+          const falta = (this.ultimoPorJid.get(jid) ?? 0) + sortear(this.intervalo, this.intervalo * 2, this.aleatorio) - this.relogio()
           if (falta > 0) await this.esperar(falta)
+          await this.o.conexao.presenca(jid, 'composing')
+          await this.esperar(duracaoDigitando(envio.tipo === 'texto' ? envio.texto : envio.pergunta, this.aleatorio))
+          await this.o.conexao.presenca(jid, 'paused').catch(() => undefined)
           if (envio.tipo === 'texto') await this.o.conexao.enviarTexto(jid, envio.texto)
           else await this.o.conexao.enviarEnquete(jid, envio.chave, envio.pergunta, envio.opcoes)
           this.ultimoPorJid.set(jid, this.relogio())

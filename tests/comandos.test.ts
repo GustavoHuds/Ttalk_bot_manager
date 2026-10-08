@@ -17,11 +17,8 @@ const f = (id: number, telefone: string | null, lid: string | null): Funcionario
   nome: `F${id}`,
   telefone,
   lid,
-  setor: null,
-  loja: null,
-  cargo: null,
-  nascimento: null,
-  ativo: true
+  ativo: true,
+  confirmadoEm: null
 })
 
 describe('parser de comandos', () => {
@@ -34,26 +31,18 @@ describe('parser de comandos', () => {
     expect(ehComando(null)).toBe(false)
   })
 
-  it('nome sem acento e minúsculo; menções saem dos argumentos; | separa campos', () => {
-    const c = interpretar('/CADASTRAR @5583999990001 Ana  Souza | Vendas |Centro', ['5583999990001@s.whatsapp.net'], null)!
-    expect(c).toEqual({
-      nome: 'cadastrar',
-      args: 'Ana Souza | Vendas |Centro',
-      campos: ['Ana Souza', 'Vendas', 'Centro'],
-      mencionados: ['5583999990001@s.whatsapp.net'],
-      citada: null
-    })
-    expect(interpretar('/Gestóres')!.nome).toBe('gestores')
-    expect(interpretar('/quem', [], '111@lid')!.citada).toBe('111@lid')
-    expect(interpretar('/menu')!.campos).toEqual([])
+  it('nome sem acento e minúsculo; menções saem dos argumentos; o bruto mantém as quebras de linha', () => {
+    expect(interpretar('/MENCIONAR @5583999990001 Passa  no caixa')).toEqual({ nome: 'mencionar', args: 'Passa no caixa', bruto: 'Passa no caixa' })
+    expect(interpretar('/all Linha 1\n  Linha 2')).toEqual({ nome: 'all', args: 'Linha 1 Linha 2', bruto: 'Linha 1\nLinha 2' })
+    expect(interpretar('/Rêpeat')!.nome).toBe('repeat')
     expect(interpretar('oi')).toBeNull()
-    expect(interpretar(`/menu ${'x'.repeat(3000)}`)).toBeNull()
+    expect(interpretar(`/menu ${'x'.repeat(5000)}`)).toBeNull()
   })
 
   it('apelidos levam ao comando certo; desconhecido devolve null', () => {
     expect(acharComando('ajuda')!.nome).toBe('menu')
-    expect(acharComando('help')!.nome).toBe('menu')
-    expect(acharComando('cadastrar')!.gestor).toBe(true)
+    expect(acharComando('mutar')!.nome).toBe('mutegroup')
+    expect(acharComando('remover')!.nome).toBe('remove')
     expect(acharComando('xyz')).toBeNull()
     expect(acharComando('hasOwnProperty')).toBeNull()
     expect(new Set(COMANDOS.map((c) => c.nome)).size).toBe(COMANDOS.length)
@@ -66,11 +55,7 @@ describe('parser de comandos', () => {
     expect(interpretar('/home/x')).toBeNull()
     expect(ehComando('/menu.')).toBe(true)
     expect(interpretar('/menu.')!.nome).toBe('menu')
-    expect(ehComando(`/menu ${'x'.repeat(2001)}`)).toBe(false)
-  })
-
-  it('quebras de linha nos argumentos colapsam para um espaço', () => {
-    expect(interpretar('/cadastrar Ana\nSouza | Vendas')!.args).toBe('Ana Souza | Vendas')
+    expect(ehComando(`/menu ${'x'.repeat(4001)}`)).toBe(false)
   })
 
   it('acento decomposto (NFD) também é reconhecido', () => {

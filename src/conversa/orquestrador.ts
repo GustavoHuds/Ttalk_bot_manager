@@ -35,6 +35,8 @@ export interface DependenciasOrquestrador {
   aleatorio?: () => number
   /** Avisado quando há algo novo na caixa de saída. */
   aoEnfileirar?: (numeroId: number) => void
+  /** Número pausado: conectado, mas o bot não lê nada (a mensagem nem é gravada). */
+  pausado?: (numeroId: number) => boolean
 }
 
 const MAX_TENTATIVAS = 3
@@ -53,8 +55,9 @@ export class Orquestrador {
     this.aleatorio = d.aleatorio ?? Math.random
   }
 
-  /** Grava e enfileira. Devolve false se a mensagem já tinha sido recebida. */
+  /** Grava e enfileira. Devolve false se a mensagem já tinha sido recebida (ou o número está pausado). */
   receber(m: MensagemRecebida): boolean {
+    if (this.d.pausado?.(m.numeroId)) return false
     if (!this.d.repo.registrarRecebida(m.numeroId, m.id, m.jid, m.recebidaEm, JSON.stringify(m))) return false
     if (m.telefone || m.lid) this.d.repo.completarIdentidade(m.numeroId, m.jid, m.telefone, m.lid)
     this.agendar(m.numeroId, m.jid, () => this.processarMensagem(m.numeroId, m.id))

@@ -8,7 +8,10 @@ export interface Numero {
   id: number
   nome: string
   papel: Papel
+  /** Sem conexão: só volta a ligar quando a tela do número é aberta (para ler o QR). */
   ativo: boolean
+  /** Conectado, mas o bot não lê nem envia nada. */
+  pausado: boolean
   criadoEm: number
 }
 
@@ -17,10 +20,11 @@ interface LinhaNumero {
   nome: string
   papel: Papel
   ativo: number
+  pausado: number
   criado_em: number
 }
 
-const deLinha = (l: LinhaNumero): Numero => ({ id: l.id, nome: l.nome, papel: l.papel, ativo: l.ativo === 1, criadoEm: l.criado_em })
+const deLinha = (l: LinhaNumero): Numero => ({ id: l.id, nome: l.nome, papel: l.papel, ativo: l.ativo === 1, pausado: l.pausado === 1, criadoEm: l.criado_em })
 
 /** Números de WhatsApp. Nunca são apagados (outras tabelas guardam numero_id); só desativados. */
 export class RepoNumeros {
@@ -42,5 +46,13 @@ export class RepoNumeros {
 
   definirAtivo(id: number, ativo: boolean): void {
     this.db.prepare(`UPDATE numeros SET ativo = ? WHERE id = ?`).run(ativo ? 1 : 0, id)
+  }
+
+  definirPausado(id: number, pausado: boolean): void {
+    this.db.prepare(`UPDATE numeros SET pausado = ? WHERE id = ?`).run(pausado ? 1 : 0, id)
+  }
+
+  renomear(id: number, nome: string): void {
+    this.db.prepare(`UPDATE numeros SET nome = ? WHERE id = ?`).run(nome, id)
   }
 }

@@ -2,9 +2,7 @@
 
 # Ttalk Bot Manager
 
-**Self-hosted WhatsApp bots that wait for the first message, ask a few questions, collect a file and keep it safe on your own server.**
-
-Built for recruitment (candidate → questions → CV), designed to be reused for every new opening without touching code.
+**Self-hosted WhatsApp bots for small businesses: a recruitment bot that collects CVs, and a group bot that runs your company groups — managed from one web panel on your own server.**
 
 [![CI](https://github.com/GustavoHuds/Ttalk_bot_manager/actions/workflows/ci.yml/badge.svg)](https://github.com/GustavoHuds/Ttalk_bot_manager/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -13,7 +11,7 @@ Built for recruitment (candidate → questions → CV), designed to be reused fo
 ![Baileys 7](https://img.shields.io/badge/Baileys-7.0.0--rc14-25D366?logo=whatsapp&logoColor=white)
 ![Docker](https://img.shields.io/badge/deploy-docker%20compose-2496ED?logo=docker&logoColor=white)
 
-[Português](README.pt-BR.md) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Security](#security-and-privacy)
+[Português](README.pt-BR.md) · [Quick start](#quick-start) · [Group bot commands](#group-bot-commands) · [Staying under the radar](#staying-under-the-radar) · [Security](#security-and-privacy)
 
 <img src="docs/img/bots.png" alt="Bot list in the admin panel" width="900">
 
@@ -23,54 +21,91 @@ Built for recruitment (candidate → questions → CV), designed to be reused fo
 
 ## Why
 
-Hiring through WhatsApp usually means a person copying names from chats and digging CVs out of a phone gallery. Off-the-shelf WhatsApp gateways solve the connection but leave you to build the conversation, the storage and the privacy rules yourself.
+Small companies run on WhatsApp. Hiring means someone copying names from chats and digging CVs out of a phone gallery; managing a dozen store groups means someone pinging everyone by hand, reposting the same reminder every morning and deleting scam messages at midnight.
 
-Ttalk is the whole thing in one small process: one or more WhatsApp numbers (recruitment or company groups), as many bots as you have openings, a web panel to create them, and a vault for what candidates send. No browser, no Redis, no PostgreSQL.
+Off-the-shelf gateways give you a connection and leave the rest to you. Ttalk is the whole thing in **one small Node.js process**: several WhatsApp numbers, as many bots as you need, a web panel to run them, and a vault for what people send. No browser, no Redis, no PostgreSQL — just SQLite.
 
-## Features
+## Two kinds of bot
 
-**Conversation**
-- Waits for the person to write first: never starts a conversation.
-- One question per message: free text (with optional full-name or phone validation) or a native WhatsApp **poll**. Typed answers like `2` or `manhã` also work.
-- Ends by collecting a file: **PDF, DOCX or photos**. Multi-page photos are grouped (60 s after the last one).
-- Sent the CV first? It is kept and the questions continue; nothing is lost.
-- Handles real-world mess: audio and stickers, wrong formats, oversize files, coming back after 24 h, replacing a CV later, and hidden numbers (WhatsApp `@lid` IDs). When the number is hidden it asks for a phone.
-- Entry by `wa.me` link with the opening's code, or by writing straight to the number. With several openings, the person picks one in a poll.
+### Recruitment bots
 
-**Admin panel**
-- **Create, edit, copy, open and close bots** in the browser. Changes apply instantly, with no restart.
-- Candidate list per opening, file download, **ZIP export (CSV + files)** ready for AI screening.
-- **Numbers** page (one QR code per number), health page, full audit log (who viewed, downloaded, exported or deleted what).
-- **Several WhatsApp numbers in one process.** Each number has one role: *recruitment* (candidates) or *groups* (company groups). A ban on one never touches the other.
-- **Group bot core.** Team registry (with CSV import/export), managers, and WhatsApp commands: `/menu`, `/gestores`, `/quem`, `/cadastrar`, `/setores`, `/desconhecidos`, `/grupos`, `/gestor add|remover`, `/status`, `/log`. Only registered managers can run management commands; being a WhatsApp group admin grants nothing. Plain group chat is never stored.
+One bot per job opening, created in the panel without touching code.
 
-**Reliability** (the guarantees you would get from the official API)
+- **Waits for the candidate to write first** — it never starts a conversation.
+- One question per message: free text (with optional full-name or phone validation) or a native **WhatsApp poll**. Typed answers like `2` or `manhã` work too.
+- Ends by collecting a **PDF, DOCX or photos**; multi-page photos are grouped. A CV sent too early is kept, not lost.
+- Handles real life: audio and stickers, wrong formats, oversize files, coming back a day later, replacing a CV, and hidden numbers (`@lid`).
+- Entry by a `wa.me` link carrying the opening's code, or by writing to the number directly (with several openings, the candidate picks one in a poll).
+- Candidate list, file download and **ZIP export (CSV + files)** ready for screening.
 
-| Official Cloud API guarantee | How Ttalk reproduces it |
+### Group bots
+
+One bot runs the company groups you choose, from the group itself or from a private chat with it.
+
+- **Acts only in groups you activate.** Everywhere else it is silent and stores nothing.
+- **Managers are the only people registered.** Add a name and a WhatsApp number; the person gets power only after sending a 6-digit code (`/confirmar`) from that exact WhatsApp. A code from a different number is held for you to check.
+- **Commands work in the group and in private.** In private, the bot asks which group (numbered list), runs the command there and remembers the choice for the next ones.
+- **Scheduled messages** per group: weekdays or a single date, up to four times a day, up to **three message variations** (picked at random, never the same twice in a row), images, video, audio or documents, and an optional hidden mention of everyone.
+- **Moderation**: banned words are deleted automatically, the group can be closed now or every night on a schedule, and members can be removed by command.
+- Each command can be switched off per bot.
+
+<div align="center">
+<img src="docs/img/grupos.png" alt="Active groups of a group bot" width="900">
+</div>
+
+## Group bot commands
+
+All commands are for confirmed managers; anyone else gets no reply.
+
+| Command | In a group | In private (the bot asks which group) |
+| --- | --- | --- |
+| `/all message` | Posts the message mentioning everyone **without showing the mentions**, and deletes the manager's command | Posts it in the chosen group; attach a photo or video and it goes along |
+| `/todos message` | Same, with every `@mention` visible in the text | Same, in the chosen group |
+| `/mencionar message @person` | Posts the message mentioning that person silently | Use the person's phone number instead of `@` |
+| `/remove @person …` | Removes members (never group admins) | Phone numbers instead of `@` |
+| `/banword word, other` | Messages containing those words are deleted. `/banword` lists, `/banword remover x` removes, `/banword limpar` clears | Same, for the chosen group |
+| `/mutegroup` · `/mutegroup 22:00/06:00` | Closes the group (only admins can write) until `/unmute`, or every day in that window | Same |
+| `/unmute` | Opens the group and clears the schedule | Same |
+| `/repeat 08:00 18:30` | Reply to (quote) any message — text or media — and the bot reposts it every day at those times. Plain `/repeat` asks for the message; `/repeat stop` stops | Same |
+| `/menu` · `/grupo` | Lists the commands | `/grupo` picks a different group |
+
+Removing members, closing the group and deleting messages require the bot's number to be a group admin; the bot tells you when it isn't. Mentions work either way.
+
+## Panel
+
+A clean, responsive panel (sidebar on desktop, menu on phones) in Portuguese.
+
+| Group bot · scheduled message | Group bot · managers |
 | --- | --- |
-| A webhook is never processed twice | Every message ID is stored; duplicates are dropped |
-| No message is lost | Messages are written to SQLite *before* processing; pending ones are retried after a crash |
-| Replies are consistent with state | Replies go to an **outbox written in the same transaction** as the state change |
-| Media can always be downloaded | Download retries plus media re-upload request when the link expires |
-| Account status is visible | `/saude` page and a data-free `/healthz` for uptime monitors |
+| <img src="docs/img/programada.png" alt="Scheduled message editor" width="440"> | <img src="docs/img/gestores.png" alt="Managers with confirmation codes" width="440"> |
+| **Recruitment bot editor** | **Candidates** |
+| <img src="docs/img/editor.png" alt="Recruitment bot editor" width="440"> | <img src="docs/img/candidatos.png" alt="Candidates" width="440"> |
+| **Number (QR pairing)** | **On a phone** |
+| <img src="docs/img/conexao.png" alt="Number page with QR code" width="440"> | <img src="docs/img/celular.png" alt="Panel on a phone" width="220"> |
 
-**Anti-ban behaviour**: reply-only, read receipts, "typing…" for 1 to 4 s scaled to message length, at least 1.5 s between messages per chat, 20 per minute per number, randomised greeting variants, never shown as permanently online, no history sync, exponential reconnect backoff, and a full stop on logout instead of hammering.
+*Screenshots use fictional demo data (`npm run capturas`, `npx tsx scripts/previa-painel.ts`).*
 
-## Screenshots
+- **Numbers**: each number has one role — *recruitment* or *groups* — so a ban on one never touches the other. A number can be **paused** (stays connected, the bot stops reading and sending) or **revoked** (the linked WhatsApp is logged out and a fresh QR appears). The QR only runs while its page is open.
+- **Health** page, a data-free `/healthz` for uptime monitors, and a full **audit log** (who viewed, exported, changed or deleted what).
 
-| Bot editor | Candidates |
-| --- | --- |
-| <img src="docs/img/editor.png" alt="Bot editor" width="440"> | <img src="docs/img/candidatos.png" alt="Candidates" width="440"> |
-| **Connection (QR)** | **Health** |
-| <img src="docs/img/conexao.png" alt="QR connection page" width="440"> | <img src="docs/img/saude.png" alt="Health page" width="440"> |
+## Staying under the radar
 
-*Screenshots use fictional demo data (`npm run capturas`).*
+WhatsApp bans numbers for *patterns*, not single actions. Ttalk follows what long-running tools (Evolution API, WPPConnect, whatsapp-web.js, the Baileys guides) converge on:
+
+- **Never starts a conversation** — the biggest ban trigger by far.
+- **"Typing…" sized to the message and randomised** each time (30–60 ms per character plus a short pause), then "stopped typing", then the message.
+- **Irregular gaps** between messages and scheduled sends spread over ~45 s instead of firing on the exact second.
+- **Per-number caps** per minute and per hour, and a one-per-minute brake on mass mentions.
+- **Message variations** for anything scheduled, so the same text doesn't repeat like clockwork.
+- Reads before replying, caches group metadata, never shows "online" permanently, no history sync, no link previews, exponential reconnect backoff, and a full stop on logout instead of hammering.
+
+Full table with the reasoning behind each measure: [docs/anti-ban.md](docs/anti-ban.md).
 
 ## How it works
 
 ```mermaid
 sequenceDiagram
-    actor C as Candidate
+    actor P as Person
     participant W as WhatsApp
     participant A as Baileys adapter
     participant O as Orchestrator
@@ -78,58 +113,58 @@ sequenceDiagram
     participant DB as SQLite
     participant S as Sender
 
-    C->>W: "Quero me candidatar [VEND-OUT26]"
+    P->>W: message or command
     W->>A: message
     A->>O: normalised message
-    O->>DB: store inbox row (dedupe by ID)
-    O->>M: context + message
-    M-->>O: actions (save answer, next step, reply…)
-    O->>DB: one transaction: state + answers + outbox
+    O->>DB: dedupe by message ID
+    O->>M: snapshot + message
+    M-->>O: actions (reply, save, schedule…)
+    O->>DB: one transaction: state + outbox + audit
     S->>DB: read outbox
-    S->>W: typing… then reply (rate limited)
-    W->>C: next question / poll
-    C->>W: CV (PDF / photos)
-    O->>DB: file stored with random name + SHA-256
+    S->>W: typing… then send (human pacing, rate limited)
 ```
 
 ```
 src/
-├── conversa/     engine (pure rules) + orchestrator (inbox → engine → transaction → outbox)
-├── whatsapp/     Baileys adapter (the only Baileys-aware code), sender with human pacing, message normaliser
-├── config/       bots stored in SQLite, validation shared by panel and engine
-├── painel/       Fastify panel: auth, bot editor, candidates, export, connection, health, audit
-├── rotinas/      retention, encrypted backup, e-mail alerts
-└── db/           schema migrations and repository
+├── conversa/   recruitment engine (pure rules) + orchestrator
+├── grupos/     group bot: commands, engine (pure), orchestrator, scheduler, sender
+├── whatsapp/   Baileys adapter (the only Baileys-aware code), pacing, message normaliser
+├── painel/     Fastify panel: auth, bots, numbers, group bots, health, audit
+├── config/     recruitment bots stored in SQLite, shared validation
+├── rotinas/    retention, encrypted backup, e-mail alerts
+└── db/         migrations and repositories
 ```
 
-- **The engine never talks to WhatsApp or the database.** It returns a list of actions, so every conversation path is unit-tested without a phone.
-- **The adapter is swappable.** Moving to Evolution API or Meta's official Cloud API means writing one class with the same five methods; the flow stays untouched.
+- **Both engines are pure.** They take a snapshot and return a list of actions, so every conversation path is unit-tested without a phone.
+- **Nothing is lost or sent twice.** Messages are deduplicated by ID, and replies go to an outbox written in the same transaction as the state change.
+- **Plain group chat is never stored or logged.** From an active group, only commands, replies the bot is waiting for and messages with a banned word go past the orchestrator — and only their IDs are kept.
+- **The adapter is swappable.** Moving to Evolution API or Meta's Cloud API means writing one class.
 
 ## Quick start
 
-Requirements: Docker (or Node.js 22), and a WhatsApp number dedicated to the bot.
+Requirements: Docker (or Node.js 22) and a WhatsApp number dedicated to each role.
 
 ```bash
 git clone https://github.com/GustavoHuds/Ttalk_bot_manager.git
 cd Ttalk_bot_manager
 cp .env.example .env
 
-# 1. secret for the session cookie
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # → PAINEL_SEGREDO
-# 2. panel user (prints a line for PAINEL_USUARIOS)
+# 1. secret for the session cookie → PAINEL_SEGREDO
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# 2. a panel user (prints the line for PAINEL_USUARIOS)
 npm install && npm run senha -- admin
-# 3. your company name, used as {empresa} in messages
-#    EMPRESA_NOME=Acme Ltda
+# 3. your company name, used as {empresa} in messages → EMPRESA_NOME
 
 mkdir -p data && sudo chown 1000:1000 data   # the container runs as uid 1000
 docker compose up -d --build
 ```
 
-Open `http://127.0.0.1:3100`, sign in, go to **Números**, open *Principal* and scan the QR code with WhatsApp → *Linked devices*. Then **+ Novo bot**, fill in the opening, **Abrir inscrições**, and share the link shown in the list.
+Open `http://127.0.0.1:3100` and sign in.
 
-To add the group bot: **Números → + Número** with role *Grupos*, scan the QR with that phone, add the number to your groups, then register people in **Equipe** (or import a CSV) and mark at least one manager. Managers send `/menu` to the bot in private to see what they can do.
+- **Recruitment:** *Números* → open *Principal* → scan the QR with WhatsApp → *Linked devices*. Then *Bots* → **+ Bot de recrutamento**, fill in the opening, **Abrir inscrições**, and share the link.
+- **Groups:** *Números* → **+ Número** with role *Grupos* → scan its QR, and add that number to your groups. Then *Bots* → **+ Bot de grupos**, pick the number, activate groups in the **Grupos** tab and add a manager in **Gestores**. The manager confirms by sending the code to the bot in private, then sends `/menu`.
 
-In production, publish the panel behind your reverse proxy with HTTPS:
+In production, publish the panel behind a reverse proxy with HTTPS:
 
 ```caddyfile
 bots.example.com {
@@ -142,50 +177,49 @@ bots.example.com {
 
 ```bash
 npm install
-npm run dev          # watch mode, panel on http://127.0.0.1:3100 (set PAINEL_COOKIE_SEGURO=false without HTTPS)
+npm run dev          # watch mode, panel on http://127.0.0.1:3100 (PAINEL_COOKIE_SEGURO=false without HTTPS)
 npm run build && npm start
 ```
+
+Try the panel with demo data and no WhatsApp at all: `npx tsx scripts/previa-painel.ts` → `http://127.0.0.1:3199` (user `demo`, password `demonstracao`).
 </details>
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `EMPRESA_NOME` | `nossa empresa` | Company name, available as `{empresa}` in every message |
+| `EMPRESA_NOME` | `nossa empresa` | Company name, available as `{empresa}` in recruitment messages |
 | `PAINEL_SEGREDO` | required | ≥ 32 chars, signs the session cookie |
 | `PAINEL_USUARIOS` | required | `name:hash;name2:hash2`, generate with `npm run senha -- name` |
 | `PAINEL_HOST` / `PAINEL_PORTA` | `127.0.0.1` / `3100` | Panel bind address |
 | `PAINEL_COOKIE_SEGURO` | `true` | Secure cookie (HTTPS); `false` only for local testing |
-| `JANELA_RESPOSTA_HORAS` | `24` | Only reply to messages received within this window |
+| `JANELA_RESPOSTA_HORAS` | `24` | Recruitment only replies to messages received within this window |
 | `BACKUP_SENHA` | empty (off) | Enables the encrypted daily backup |
 | `BACKUP_RETENCAO_DIAS` | `365` | How long backups are kept |
 | `SMTP_URL`, `ALERTA_EMAIL_DE`, `ALERTA_EMAIL_PARA` | empty (off) | E-mail alerts: connection down > 10 min, logout, recovery, failed backup |
 | `DADOS_DIR` / `CONFIG_DIR` | `./data` / `./config` | Data vault and factory texts |
 | `LOG_NIVEL` | `info` | pino log level |
 
-Factory texts live in [`config/mensagens-padrao.yaml`](config/mensagens-padrao.yaml). Each bot can override any of them in the panel. Variables: `{empresa}`, `{vaga}`, `{primeiro_nome}`, `{protocolo}`, `{retencao_meses}`.
-
-Sessions live in `data/sessoes/<number id>/`. An existing `data/sessao/` from 1.0 is moved to `data/sessoes/1/` on the first start, no re-pairing needed.
+Recruitment factory texts live in [`config/mensagens-padrao.yaml`](config/mensagens-padrao.yaml); each bot can override them in the panel. The database migrates itself on start.
 
 ## Security and privacy
 
 Built with Brazil's LGPD in mind (it maps well to GDPR):
 
-- **Purpose and retention are stated up front** in the first message, not a vague "your data is protected".
-- **Minimum data**: only what each bot asks for.
-- **Self-service erasure**: the candidate writes *"excluir meus dados"* and confirms with *SIM*. Everything linked to that number is erased, and only the date of the erasure is logged.
+- **Purpose and retention stated up front**, minimum data, and **self-service erasure** (the candidate writes *"excluir meus dados"* and confirms).
 - **Automatic retention**: a daily job deletes each opening's data after its retention period.
-- **Files outside any public folder**, with random names. The candidate's name lives only in the database. File signatures are checked, so a fake `cv.pdf` is rejected.
-- **Panel** behind login (scrypt hashes, signed `HttpOnly` + `SameSite=Strict` cookie, lockout after 5 failures). Every view, download, export and deletion is audited.
-- **Encrypted daily backup** (AES-256-GCM, scrypt-derived key) of database, files and sessions.
-- **Logs carry IDs only**, never message content or personal data. CSV export neutralises spreadsheet formula injection.
+- **Files outside any public folder**, with random names; file signatures are checked.
+- **Group bots store no conversation**: only the IDs needed to avoid double processing, the groups you activate, your managers and what you schedule.
+- **Panel** behind login (scrypt hashes, signed `HttpOnly` + `SameSite=Strict` cookie, lockout after 5 failures); every sensitive action is audited.
+- **Encrypted daily backup** (AES-256-GCM) of database, files and sessions.
+- **Logs carry IDs only**, never message content or personal data.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Testing
 
 ```bash
-npm test          # 90 tests: engine, full flows on SQLite, sender pacing, panel, editor UI (jsdom), backup, retention
+npm test          # 228 tests: both engines, full flows on SQLite, scheduler, pacing, panel, editor UI (jsdom), backup
 npm run typecheck
 ```
 
@@ -194,23 +228,23 @@ CI runs typecheck, tests and the Docker build on every push.
 ## FAQ
 
 **Will my number get banned?**
-The main ban trigger is starting conversations in bulk, and Ttalk never does that: it only replies, with human pacing. Risk is low but never zero with any unofficial connection. Use a dedicated, warmed-up number with a complete WhatsApp Business profile, and keep a spare SIM.
+Risk is never zero with an unofficial connection, but Ttalk avoids every pattern that usually gets numbers banned (see [Staying under the radar](#staying-under-the-radar)). Use a dedicated, warmed-up number per role and keep a spare SIM.
+
+**Why does the group bot need to be an admin?**
+WhatsApp only lets admins remove members, close the group and delete other people's messages. Mentions and scheduled messages work without it.
 
 **Why Baileys and not whatsapp-web.js or Evolution API?**
-Baileys speaks the WhatsApp Web protocol over a WebSocket with no browser, so it is light enough to share a small VPS. Evolution API is great for many numbers but adds PostgreSQL and Redis and, from 2.4, a licence check. The adapter layer keeps the door open to any of them, or to the official Cloud API.
+Baileys speaks the WhatsApp Web protocol over a WebSocket with no browser, so it fits on a small VPS. Evolution API is great for many numbers but adds PostgreSQL and Redis. The adapter layer keeps the door open to either, or to the official Cloud API.
 
-**Do poll answers work on Baileys 7?**
-Baileys 7 no longer decrypts poll votes by itself. Ttalk stores each poll's secret and decrypts votes in the adapter. If a device ever fails, typing the option number works too.
-
-**Can I use it for something other than recruitment?**
-Yes. Any "ask a few questions, then receive a file" flow fits: registrations, document collection, warranty claims.
+**Can I use the recruitment bot for something else?**
+Yes — any "ask a few questions, then receive a file" flow fits: registrations, document collection, warranty claims.
 
 ## Roadmap
 
 - [ ] AI screening of exported CVs (OCR for photos)
+- [ ] Polls and confirmations in group bots
 - [ ] Telegram alerts
 - [ ] Optional official Cloud API adapter
-- [ ] Per-source link tracking (Instagram, job boards, store posters)
 
 ## Contributing
 
