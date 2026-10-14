@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",
-    "@fastify/formbody": "9.0.0",
+    "@fastify/formbody": "9.0.1",
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "archiver": "8.0.0",
     "better-sqlite3": "13.0.3",
