@@ -11,10 +11,10 @@ import type { RepoGrupos } from '../db/grupos.js'
 import type { Numero, RepoNumeros } from '../db/numeros.js'
 import type { Repositorio } from '../db/repositorio.js'
 import type { EstadoConexao } from '../whatsapp/baileys.js'
-import { LimiteLogin, senhaConfere } from './auth.js'
+import { LimiteLogin, hashSenha, senhaConfere } from './auth.js'
 import { paginaEditorBot } from './editor.js'
 import { gerarZip } from './exportar.js'
-import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude, type ResumoBotGrupos } from './paginas.js'
+import { paginaAuditoria, paginaLogin, paginaProcesso, paginaProcessos, paginaSaude, paginaSenha, type ResumoBotGrupos } from './paginas.js'
 import { rotasBotGrupos } from './rotas-bot-grupos.js'
 import { rotasNumeros } from './rotas-numeros.js'
 
@@ -80,6 +80,22 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
     if (!publica && !req.usuario) return rep.redirect('/login', 303)
   })
 
+  /**
+   * Senha trocada pelo painel fica em meta `senha:<usuario>` junto com o hash do .env que ela substituiu.
+   * Se o .env mudar (senha redefinida no servidor), a troca antiga deixa de valer e o .env volta a mandar.
+   */
+  const hashDe = (nome: string): string | undefined => {
+    const doEnv = d.usuarios.get(nome)
+    if (!doEnv) return undefined
+    try {
+      const t = JSON.parse(d.repo.meta(`senha:${nome}`) ?? 'null') as { base?: string; hash?: string } | null
+      if (t?.base === doEnv && typeof t.hash === 'string') return t.hash
+    } catch {
+      // registro corrompido: vale o .env
+    }
+    return doEnv
+  }
+
   const html = (rep: FastifyReply, corpo: string) => rep.type('text/html; charset=utf-8').send(corpo)
   const usuario = (req: FastifyRequest) => req.usuario!
 
@@ -97,7 +113,7 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
       return html(rep.code(429), paginaLogin('Muitas tentativas. Espere 15 minutos.'))
     }
     const nome = (req.body?.usuario ?? '').trim()
-    const hash = d.usuarios.get(nome)
+    const hash = hashDe(nome)
     if (!hash || !senhaConfere(req.body?.senha ?? '', hash)) {
       limite.falhou(req.ip, agora())
       d.repo.auditar(nome || '?', 'login_falhou', req.ip, agora())
@@ -114,6 +130,26 @@ export async function criarPainel(d: DependenciasPainel): Promise<FastifyInstanc
       maxAge: DURACAO_SESSAO_MS / 1000
     })
     return rep.redirect('/', 303)
+  })
+
+  app.get('/senha', async (req, rep) => html(rep, paginaSenha(usuario(req), null, null)))
+
+  app.post<{ Body: { atual?: string; nova?: string; confirma?: string } }>('/senha', async (req, rep) => {
+    const nome = usuario(req)
+    const erro = (msg: string, code = 400) => html(rep.code(code), paginaSenha(nome, null, msg))
+    if (limite.bloqueado(req.ip, agora())) return erro('Muitas tentativas. Espere 15 minutos.', 429)
+    const { atual = '', nova = '', confirma = '' } = req.body ?? {}
+    if (!senhaConfere(atual, hashDe(nome)!)) {
+      limite.falhou(req.ip, agora())
+      d.repo.auditar(nome, 'trocar_senha_falhou', req.ip, agora())
+      return erro('Senha atual incorreta.', 401)
+    }
+    if (nova.length < 12) return erro('A nova senha precisa ter pelo menos 12 caracteres.')
+    if (nova !== confirma) return erro('A confirmação não é igual à nova senha.')
+    if (nova === atual) return erro('A nova senha precisa ser diferente da atual.')
+    d.repo.definirMeta(`senha:${nome}`, JSON.stringify({ base: d.usuarios.get(nome), hash: hashSenha(nova) }))
+    d.repo.auditar(nome, 'trocar_senha', req.ip, agora())
+    return html(rep, paginaSenha(nome, 'Senha alterada. Use a nova senha no próximo login.', null))
   })
 
   app.post('/sair', async (_req, rep) => {

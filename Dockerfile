@@ -1,5 +1,5 @@
 # Etapa 1: compila o TypeScript
-FROM node:22-bookworm-slim AS build
+FROM node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS build
 # better-sqlite3 compila nativo quando não há binário pronto
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -10,7 +10,7 @@ COPY src ./src
 RUN npx tsc -p tsconfig.json && npm prune --omit=dev
 
 # Etapa 2: só o necessário para rodar
-FROM node:22-bookworm-slim
+FROM node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 ENV NODE_ENV=production DADOS_DIR=/app/data CONFIG_DIR=/app/config PAINEL_HOST=0.0.0.0 PAINEL_PORTA=3100
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules

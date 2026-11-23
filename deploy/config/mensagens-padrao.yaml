@@ -1,0 +1,44 @@
+# Textos padrão do bot. Cada processo pode sobrescrever qualquer chave em `mensagens:`.
+# Variáveis disponíveis: {empresa} {vaga} {codigo} {retencao_meses} {primeiro_nome} {protocolo} {opcoes}
+# Uma chave com lista de textos tem uma versão sorteada a cada envio.
+
+boas_vindas:
+  - "Olá! Aqui é o RH da {empresa}. Que bom que você quer fazer parte do time de {vaga}!"
+  - "Oi! Você está falando com o RH da {empresa}. Ficamos felizes com seu interesse na vaga de {vaga}!"
+  - "Olá, tudo bem? Aqui é o RH da {empresa}. Obrigado pelo interesse na vaga de {vaga}!"
+aviso_dados: "Seus dados serão usados só neste processo seletivo e guardados por até {retencao_meses} meses, conforme a LGPD. Para apagá-los a qualquer momento, escreva \"excluir meus dados\"."
+
+pede_nome: "Para começar, qual é o seu nome completo?"
+pede_cidade: "Em qual cidade e bairro você mora?"
+pede_disponibilidade: "Qual horário você tem disponível?"
+pede_pretensao: "Qual é a sua pretensão salarial? Pode responder \"a combinar\"."
+pede_curriculo: "Agora envie seu currículo em PDF, Word ou foto."
+pede_telefone: "Para finalizar, qual é o seu telefone com DDD para contato?"
+
+confirmacao: "Obrigado, {primeiro_nome}! Recebemos seu currículo (protocolo {protocolo}). Ele será analisado pela nossa equipe e, se seu perfil avançar, entraremos em contato por este número."
+
+nome_invalido: "Por favor, envie seu nome completo (nome e sobrenome)."
+texto_invalido: "Não entendi sua resposta. Pode escrever de novo, de forma curta?"
+telefone_invalido: "Não reconheci o número. Envie o telefone com DDD, por exemplo: 83 99999-9999."
+opcao_invalida: "Escolha uma das opções abaixo respondendo com o número:\n{opcoes}"
+espera_texto: "Agora preciso de uma resposta em texto."
+espera_arquivo: "Ainda falta o currículo. Envie em PDF, Word ou foto (até 10 MB)."
+arquivo_recebido: "Recebido! Se o currículo tiver mais páginas, pode enviar em seguida."
+arquivo_antecipado: "Recebi seu currículo! Antes de finalizar, preciso de algumas informações rápidas."
+formato_nao_aceito: "Não consigo abrir esse formato. Envie o currículo em PDF, Word ou foto."
+arquivo_grande: "Esse arquivo passou do limite de tamanho. Envie uma versão menor, em PDF ou foto."
+erro_download: "Não consegui receber seu arquivo. Pode enviar de novo, por favor?"
+midia_nao_suportada: "Por aqui eu recebo só mensagens de texto e o currículo (PDF, Word ou foto)."
+
+retomada: "Que bom que você voltou! Vamos continuar de onde paramos."
+ja_concluiu: "Oi, {primeiro_nome}! Sua candidatura para {vaga} já foi recebida (protocolo {protocolo}). Se quiser trocar o currículo, é só enviar o arquivo novo aqui."
+curriculo_substituido: "Pronto, {primeiro_nome}! Seu currículo foi atualizado."
+
+processo_encerrado: "As inscrições para {vaga} não estão abertas no momento. Obrigado pelo interesse!"
+sem_processos: "Olá! Aqui é o RH da {empresa}. No momento não temos inscrições abertas por este número. Obrigado pelo interesse!"
+escolher_vaga: "Olá! Aqui é o RH da {empresa}. Para qual vaga você quer se candidatar?"
+
+confirmar_exclusao: "Você pediu para excluir seus dados. Isso apaga suas candidaturas e currículos enviados por este número. Responda SIM para confirmar."
+dados_excluidos: "Pronto. Seus dados foram excluídos."
+exclusao_cancelada: "Tudo bem, nada foi excluído."
+sem_dados: "Não encontramos dados seus guardados por este número."

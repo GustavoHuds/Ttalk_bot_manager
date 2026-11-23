@@ -1,9 +1,11 @@
 services:
   ttalk:
     build: .
-    image: ttalk-bot-manager
+    image: ttalk-bot-manager:1.0.0
     container_name: ttalk-bot-manager
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     env_file: .env
     environment:
       DADOS_DIR: /app/data
@@ -13,12 +15,31 @@ services:
     volumes:
       # Banco, currículos, sessão do WhatsApp e backups (dono: uid 1000)
       - ./data:/app/data
-      # Textos padrão e YAML para a importação inicial (os bots são editados pelo painel)
-      - ./config:/app/config:ro
+      # Textos padrão. Sem a pasta processos/, nenhum bot de exemplo é importado na primeira subida.
+      - ./deploy/config:/app/config:ro
     ports:
-      # Só local: o proxy reverso (Caddy) publica com HTTPS
+      # Só local: o Traefik do Coolify publica com HTTPS em ttalk.lojasbelmont.com.br
       - "127.0.0.1:3100:3100"
+    networks: [default, coolify]
     mem_limit: 512m
+    # /healthz só fica 200 com todos os números conectados; antes do pareamento, checa o painel (/login)
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    cpus: 1.0
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+
+networks:
+  # Rede do coolify-proxy (Traefik); rota em /data/coolify/proxy/dynamic/ttalk.yaml
+  coolify:
+    external: true

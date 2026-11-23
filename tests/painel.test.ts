@@ -94,6 +94,26 @@ describe('painel', () => {
     return `sessao=${c.value}`
   }
 
+  it('troca a senha pelo painel; a antiga deixa de valer e o .env redefinido volta a mandar', async () => {
+    const cookie = await login(app)
+    expect((await app.inject({ url: '/', headers: { cookie } })).body).toContain('href="/senha"')
+    expect((await app.inject({ url: '/senha', headers: { cookie } })).statusCode).toBe(200)
+    const trocar = (corpo: string) => app.inject({ method: 'POST', url: '/senha', payload: corpo, headers: { ...form, cookie } })
+    expect((await trocar('atual=errada&nova=outra-senha-longa&confirma=outra-senha-longa')).statusCode).toBe(401)
+    expect((await trocar('atual=senha-bem-longa&nova=curta&confirma=curta')).statusCode).toBe(400)
+    expect((await trocar('atual=senha-bem-longa&nova=outra-senha-longa&confirma=diferente-demais')).statusCode).toBe(400)
+    const ok = await trocar('atual=senha-bem-longa&nova=outra-senha-longa&confirma=outra-senha-longa')
+    expect(ok.statusCode).toBe(200)
+    expect(ok.body).toContain('Senha alterada')
+    const entrar = (senha: string) => app.inject({ method: 'POST', url: '/login', payload: `usuario=rh&senha=${senha}`, headers: form })
+    expect((await entrar('senha-bem-longa')).statusCode).toBe(401)
+    expect((await entrar('outra-senha-longa')).statusCode).toBe(303)
+    expect(repo.auditoriaRecente(20).some((a) => a.acao === 'trocar_senha')).toBe(true)
+    // .env com outro hash (redefinido no servidor): a troca feita pelo painel é ignorada
+    repo.definirMeta('senha:rh', JSON.stringify({ base: 'scrypt$outro$hash', hash: hashSenha('outra-senha-longa') }))
+    expect((await entrar('senha-bem-longa')).statusCode).toBe(303)
+  })
+
   it('sem login redireciona; /healthz é público e não expõe dados', async () => {
     expect((await app.inject('/')).headers.location).toBe('/login')
     expect((await app.inject(`/arquivos/${idArquivo}`)).statusCode).toBe(303)

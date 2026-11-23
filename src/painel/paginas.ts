@@ -26,6 +26,7 @@ a{color:var(--marca)}h1,h2,h3{line-height:1.25;margin:0}h1{font-size:1.4rem}h2{f
 .nav a:hover{background:rgba(255,255,255,.06);color:#fff}.nav a.atual{background:rgba(255,255,255,.1);color:#fff}
 .nav svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .sair{margin-top:auto;padding:12px 10px 0;border-top:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.85rem}
+.sair a{color:var(--lateral-texto);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sair a:hover{color:#fff;text-decoration:underline}
 .sair button{background:transparent;border-color:rgba(255,255,255,.18);color:var(--lateral-texto);min-height:30px;padding:4px 10px}
 .barra,.veu{display:none}.corpo{min-width:0}
 main{padding:28px 32px 48px;max-width:1240px;width:100%;margin:0 auto;min-width:0}
@@ -140,7 +141,7 @@ export function layout(titulo: string, corpo: string, usuario: string | null, o:
   ).join('')
   return `${head}<body><input type="checkbox" id="menu" hidden>
 <div class="app"><aside class="lateral"><a class="marca" href="/"><i>T</i>Ttalk Bot Manager</a><nav class="nav" aria-label="Menu">${nav}</nav>
-<form class="sair" method="post" action="/sair"><span>${esc(usuario)}</span><button>Sair</button></form></aside>
+<form class="sair" method="post" action="/sair"><a href="/senha" title="Trocar senha">${esc(usuario)}</a><button>Sair</button></form></aside>
 <label for="menu" class="veu" aria-hidden="true"></label>
 <div class="corpo"><div class="barra"><label for="menu" aria-label="Abrir menu">☰</label>Ttalk Bot Manager</div><main>${corpo}</main></div></div></body></html>`
 }
@@ -225,6 +226,18 @@ export function paginaLogin(erro: string | null): string {
       </form></div>`,
     null
   )
+}
+
+export function paginaSenha(usuario: string, ok: string | null, erro: string | null): string {
+  const corpo = `${cabecalho('Trocar senha')}${mensagem(ok, erro)}
+    <form method="post" action="/senha" class="cartao campos" style="max-width:420px">
+      <input name="usuario" autocomplete="username" value="${esc(usuario)}" hidden>
+      <label class="campo"><span>Senha atual</span><input name="atual" type="password" autocomplete="current-password" required autofocus></label>
+      <label class="campo"><span>Nova senha (mínimo 12 caracteres)</span><input name="nova" type="password" autocomplete="new-password" minlength="12" required></label>
+      <label class="campo"><span>Repita a nova senha</span><input name="confirma" type="password" autocomplete="new-password" minlength="12" required></label>
+      <button class="primario">Salvar nova senha</button>
+    </form>`
+  return layout('Trocar senha', corpo, usuario)
 }
 
 const SITUACAO_BOT = { aberto: selo('aberto', 'ok'), fechado: selo('encerrado'), rascunho: selo('rascunho', 'alerta') }
